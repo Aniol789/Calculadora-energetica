@@ -181,10 +181,30 @@ lateral) des d'on pots fer tot això amb clics, sense escriure les ordres.
 ## Limitacions actuals / possibles ampliacions
 
 - El perfil de consum per defecte és una aproximació, no dades mesurades.
-- No inclou encara anàlisi econòmica (preu kWh, compensació d'excedents,
-  amortització de la instal·lació) — es podria afegir fàcilment a partir
-  del CSV horari generat.
-- PVGIS dona un any "representatiu"; per anàlisi de risc interanual caldria
-  creuar-ho amb diverses sèries d'anys reals.
-- La simulació de bateria és energètica (balanç kWh), no modela degradació
-  ni límits tèrmics del fabricant.
+- Els preus, manteniments, rendiments i emissions del catàleg tèrmic són hipòtesis orientatives i editables, no ofertes ni dades específiques d'una màquina. Cal substituir-los per pressupostos i fitxes del projecte abans de prendre decisions d'inversió.
+- La bomba de calor aplica una corba termodinàmica simplificada al COP del punt de referència. No és un SCOP certificat; per representar un equip concret calen els seus punts de rendiment del fabricant.
+- En mode `annual_kwh`, la demanda anual coneguda es conserva i la temperatura només en distribueix les hores i ajusta el COP. En mode `heat_loss_coefficient`, la demanda s'estima com `UA × max(consigna − T exterior, 0)` hora a hora. El coeficient UA s'ha de calibrar amb factures o un càlcul de pèrdues de l'edifici.
+- PVGIS selecciona un any complet representatiu de producció FV i graus-hora de calefacció. Una sola sèrie anual no quantifica la variació interanual ni els extrems meteorològics.
+- La projecció econòmica aplica una indexació general i no prediu els preus reals de cada energia durant 25 anys. S'ha d'interpretar com una hipòtesi d'escenari i completar amb sensibilitat per combustible, electricitat i manteniment.
+- La simulació de bateria és energètica (balanç kWh), no modela degradació ni límits tèrmics del fabricant.
+
+## Obrir l'app web al mòbil (mateixa xarxa Wi-Fi)
+
+1. Connecta l'ordinador i el mòbil a la mateixa xarxa Wi-Fi.
+2. A VS Code, obre un terminal a la carpeta del projecte i activa l'entorn virtual si en fas servir un. Instal·la les dependències amb `pip install -r requirements.txt`.
+3. Inicia l'app amb `streamlit run streamlit_app.py --server.address 0.0.0.0`.
+4. A Windows, executa `ipconfig` i apunta l'adreça IPv4 de l'adaptador Wi-Fi (per exemple `192.168.1.42`).
+5. Al navegador del mòbil, obre `http://192.168.1.42:8501`, substituint l'adreça d'exemple per la de l'ordinador. Si Windows demana permís pel tallafoc, permet l'accés a la xarxa privada.
+
+L'ordinador ha de continuar encès i executant Streamlit. Aquesta adreça només serveix dins la xarxa local; per accedir-hi des de fora cal desplegar l'app en un servei d'allotjament i configurar-ne l'accés.
+
+## Referències de dades
+
+- [PVGIS, servei API i documentació del JRC](https://joint-research-centre.ec.europa.eu/photovoltaic-geographical-information-system-pvgis/using-pvgis-5/api-non-interactive-service_en): producció fotovoltaica i dades meteorològiques horàries.
+- [Eurostat, preus d'electricitat domèstica (nrg_pc_204)](https://ec.europa.eu/eurostat/databrowser/view/nrg_pc_204/default/table): mitjanes semestrals per país i banda de consum; no substitueixen la tarifa del contracte individual.
+- [Eurostat, preus de gas domèstic (nrg_pc_202)](https://ec.europa.eu/eurostat/databrowser/view/nrg_pc_202/default/table): mitjanes semestrals per país i banda de consum.
+- [AVEBIOM, índex de preus de biocombustibles sòlids](https://avebiom.org/actividades/indice-de-precios-biocombustibles-solidos/): seguiment periòdic del preu del pellet.
+- [MITECO, factors del registre de petjada de carboni](https://www.miteco.gob.es/es/cambio-climatico/temas/registro-huella/huella-de-carbonoinscripcion.html): consulta els factors oficials disponibles per any i combustible.
+- [CYPE, preu de referència d'un sondeig geotèrmic](https://carm.generadordeprecios.info/obra_nueva/Instalaciones/IC_Calefaccion__climatizacion_y_A/Geotermia/Sondeo_geotermico.html) i [estudi TRI-HP](https://www.tri-hp.eu/fileadmin/downloads/Deliverables/D1.4_-_Economic_assessment_of_TRI-HP_solutions.pdf): referències per al cost de perforació; el material de sonda/reblert i la mobilització s'han de pressupostar per projecte.
+- [IEA-PVPS, informe nacional d'Espanya 2023](https://www.iea-pvps.org/wp-content/uploads/2024/12/IEA-PVPS-2023-National-Survey-Report-Spain.pdf): preu mitjà reportat de 1,4 €/W per a sistemes residencials FV instal·lats de 5–10 kW. La base del model és menor perquè hi suma el 12% de costos d'instal·lació addicionals.
+- [EUPD Research, preus d'emmagatzematge residencial H1 2025](https://www.ess-news.com/2025/07/23/eupd-research-home-storage-grows-across-europe-in-first-half-of-2025/): referència de 711 €/kWh per a bateries residencials a Alemanya; és una referència de mercat, no un pressupost local.

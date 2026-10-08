@@ -19,8 +19,8 @@ THERMAL_SOURCES = {
         "efficiency": 0.92,
         "primary_energy_factor": 1.05,
         "nonrenewable_primary_share": 1.00,
-        "direct_emission_factor_kg_co2_per_kwh": 0.202,
-        "resource_price_eur_per_kwh": 0.085,
+        "direct_emission_factor_kg_co2_per_kwh": 0.182,  # MITECO natural gas factor per kWh PCS
+        "resource_price_eur_per_kwh": 0.0955,  # Eurostat ES household 2025-S2, 20-199 GJ, taxes included
         "auxiliary_electricity_kwh_per_heat_kwh": 0.015,
         "fixed_annual_cost_eur": 120.0,
         "maintenance_annual_eur": 140.0,
@@ -46,7 +46,7 @@ THERMAL_SOURCES = {
         "primary_energy_factor": 1.95,
         "nonrenewable_primary_share": 0.55,
         "direct_emission_factor_kg_co2_per_kwh": 0.18,
-        "resource_price_eur_per_kwh": 0.22,
+        "resource_price_eur_per_kwh": 0.2669,  # Eurostat ES household 2025-S2, 2.5-5 MWh band, taxes included
         "auxiliary_electricity_kwh_per_heat_kwh": 0.0,
         "fixed_annual_cost_eur": 0.0,
         "maintenance_annual_eur": 180.0,
@@ -59,7 +59,7 @@ THERMAL_SOURCES = {
         "primary_energy_factor": 1.95,
         "nonrenewable_primary_share": 0.55,
         "direct_emission_factor_kg_co2_per_kwh": 0.18,
-        "resource_price_eur_per_kwh": 0.22,
+        "resource_price_eur_per_kwh": 0.2669,
         "auxiliary_electricity_kwh_per_heat_kwh": 0.0,
         "fixed_annual_cost_eur": 0.0,
         "maintenance_annual_eur": 220.0,
@@ -85,7 +85,7 @@ THERMAL_SOURCES = {
         "primary_energy_factor": 1.95,
         "nonrenewable_primary_share": 0.55,
         "direct_emission_factor_kg_co2_per_kwh": 0.18,
-        "resource_price_eur_per_kwh": 0.22,
+        "resource_price_eur_per_kwh": 0.2669,
         "auxiliary_electricity_kwh_per_heat_kwh": 0.0,
         "fixed_annual_cost_eur": 0.0,
         "maintenance_annual_eur": 40.0,
@@ -169,11 +169,18 @@ def estimate_geothermal_design(heat_demand_kwh, peak_power_kw=None, location_con
     demand_kwh = float(heat_demand_kwh)
     design_peak_kw = float(peak_power_kw) if peak_power_kw is not None else max(demand_kwh / 2000.0, 3.0)
     analysis_years = float(settings.get("analysis_years", 20.0))
-    heat_pump_capex_per_kw = float(settings.get("capex_eur_per_kw", 1500.0))
+    heat_pump_capex_per_kw = float(
+        settings.get("heat_pump_capex_eur_per_kw", settings.get("capex_eur_per_kw", 1500.0))
+    )
+    drilling_labor_cost_per_m = float(settings.get("drilling_labor_cost_per_m_eur", 39.0))
+    probe_material_cost_per_m = float(settings.get("probe_material_cost_per_m_eur", 16.0))
+    grout_material_cost_per_m = float(settings.get("grout_material_cost_per_m_eur", 8.0))
+    drilling_mobilization_eur = float(settings.get("drilling_mobilization_eur", 435.5))
     design_values = [
         indoor_setpoint_c, ground_loop_target_c, borehole_diameter_m, groundwater_level_m,
         mean_ground_temp_c, thermal_conductivity, thermal_diffusivity, demand_kwh,
-        design_peak_kw, analysis_years, heat_pump_capex_per_kw,
+        design_peak_kw, analysis_years, heat_pump_capex_per_kw, drilling_labor_cost_per_m,
+        probe_material_cost_per_m, grout_material_cost_per_m, drilling_mobilization_eur,
     ]
     if not np.isfinite(design_values).all():
         raise ValueError("Els paràmetres del dimensionament geotèrmic han de ser finits")
@@ -181,7 +188,10 @@ def estimate_geothermal_design(heat_demand_kwh, peak_power_kw=None, location_con
         raise ValueError("La demanda ha de ser no negativa i la potència de disseny positiva")
     if thermal_conductivity <= 0 or thermal_diffusivity <= 0 or borehole_diameter_m <= 0:
         raise ValueError("La conductivitat, difusivitat i diàmetre del pou han de ser positius")
-    if groundwater_level_m < 0 or analysis_years <= 0 or heat_pump_capex_per_kw < 0:
+    if groundwater_level_m < 0 or analysis_years <= 0 or min(
+        heat_pump_capex_per_kw, drilling_labor_cost_per_m, probe_material_cost_per_m,
+        grout_material_cost_per_m, drilling_mobilization_eur,
+    ) < 0:
         raise ValueError("El nivell freàtic i els costos han de ser vàlids i els anys d'anàlisi positius")
     delta_t_c = max(4.0, mean_ground_temp_c - ground_loop_target_c)
     # Estimació conservadora de flux tèrmic per metre de pou mostrant la relació
@@ -194,9 +204,16 @@ def estimate_geothermal_design(heat_demand_kwh, peak_power_kw=None, location_con
     boreholes_count = max(1, int(np.ceil(required_length_m / max(borehole_depth_m, 80.0))))
     total_loop_length_m = boreholes_count * borehole_depth_m
 
-    # Cost orientatiu per profunditat i terreny; s'ajusta amb la conductivitat i el nivell freàtic.
-    drilling_cost_per_m = 58.0 + 18.0 / max(thermal_conductivity, 0.8) + max(0.0, (5.0 - groundwater_level_m)) * 3.0
-    drilling_capex_eur = total_loop_length_m * drilling_cost_per_m * 1.18
+    # Separa el preu lineal de perforació dels materials i la mobilització.
+    # No s'aplica un multiplicador geològic inventat: les condicions reals s'han
+    # de reflectir en un pressupost de perforació per a l'emplaçament concret.
+    drilling_labor_cost_eur = total_loop_length_m * drilling_labor_cost_per_m
+    probe_material_cost_eur = total_loop_length_m * probe_material_cost_per_m
+    grout_material_cost_eur = total_loop_length_m * grout_material_cost_per_m
+    drilling_capex_eur = (
+        drilling_labor_cost_eur + probe_material_cost_eur + grout_material_cost_eur
+        + drilling_mobilization_eur
+    )
     heat_pump_capex_eur = design_peak_kw * heat_pump_capex_per_kw
     capex_eur = drilling_capex_eur + heat_pump_capex_eur
     annualized_capex_eur = capex_eur / analysis_years
@@ -223,7 +240,16 @@ def estimate_geothermal_design(heat_demand_kwh, peak_power_kw=None, location_con
         "estimated_drilling_capex_eur": drilling_capex_eur,
         "estimated_heat_pump_capex_eur": heat_pump_capex_eur,
         "annualized_capex_eur": annualized_capex_eur,
-        "drilling_cost_per_m_eur": drilling_cost_per_m,
+        "drilling_labor_cost_per_m_eur": drilling_labor_cost_per_m,
+        "probe_material_cost_per_m_eur": probe_material_cost_per_m,
+        "grout_material_cost_per_m_eur": grout_material_cost_per_m,
+        "drilling_mobilization_eur": drilling_mobilization_eur,
+        "drilling_labor_cost_eur": drilling_labor_cost_eur,
+        "probe_material_cost_eur": probe_material_cost_eur,
+        "grout_material_cost_eur": grout_material_cost_eur,
+        "drilling_cost_per_m_eur": (
+            drilling_labor_cost_eur + probe_material_cost_eur + grout_material_cost_eur
+        ) / total_loop_length_m if total_loop_length_m else 0.0,
         "note": "Els paràmetres geològics (conductivitat, difusivitat, temperatura del sòl, nivell freàtic) poden extreure's del ICGC o d'un estudi geotècnic local i s'han d'ajustar cas per cas.",
     }
 
@@ -235,6 +261,7 @@ def _source_runtime_config(source_key, thermal_config=None):
     common_settings = {
         "peak_power_kw": settings.get("peak_power_kw", 8.0),
         "analysis_years": settings.get("analysis_years", 20),
+        "heating_setpoint_c": settings.get("heating_setpoint_c", 20.0),
         "location_config": settings.get("location_config") or settings.get("location") or settings.get("site"),
     }
     return {
@@ -243,7 +270,87 @@ def _source_runtime_config(source_key, thermal_config=None):
     }
 
 
-def hourly_thermal_electricity_profile(index, thermal_config):
+def _thermal_heat_profile(index, thermal_config, outdoor_temp_c=None):
+    """Distribueix la demanda anual segons graus-hora; admet un model UA·ΔT opcional."""
+    annual_demand = float(thermal_config.get("annual_heat_demand_kwh", 0.0))
+    if thermal_config.get("heat_demand_mode", "annual_kwh") == "heat_loss_coefficient":
+        if outdoor_temp_c is None:
+            raise ValueError("El mode UA·ΔT necessita temperatures exteriors horàries")
+        heat_loss = float(thermal_config.get("building_heat_loss_kw_per_k", 0.0))
+        if not np.isfinite(heat_loss) or heat_loss <= 0:
+            raise ValueError("building_heat_loss_kw_per_k ha de ser positiu i finit")
+        setpoint = float(thermal_config.get("heating_setpoint_c", 20.0))
+        temperatures = np.asarray(outdoor_temp_c, dtype=float)
+        if temperatures.shape != (len(index),) or not np.isfinite(temperatures).all():
+            raise ValueError("Les temperatures exteriors han d'estar completes i ser finites")
+        heat = heat_loss * np.maximum(setpoint - temperatures, 0.0)
+        return heat, temperatures
+
+    if outdoor_temp_c is None:
+        monthly_shape = {
+            1: 1.70, 2: 1.50, 3: 1.20, 4: 0.80, 5: 0.40, 6: 0.20,
+            7: 0.12, 8: 0.12, 9: 0.20, 10: 0.65, 11: 1.15, 12: 1.60,
+        }
+        hourly_shape = np.array([
+            0.70, 0.65, 0.60, 0.58, 0.60, 0.70, 0.90, 1.05,
+            0.95, 0.75, 0.60, 0.55, 0.55, 0.60, 0.65, 0.75,
+            0.90, 1.10, 1.30, 1.40, 1.35, 1.15, 0.95, 0.80,
+        ])
+        weights = np.array([
+            monthly_shape[timestamp.month] * hourly_shape[timestamp.hour]
+            for timestamp in index
+        ], dtype=float)
+        heat = weights / weights.sum() * annual_demand if weights.sum() else weights
+        return heat, None
+
+    temperatures = np.asarray(outdoor_temp_c, dtype=float)
+    if temperatures.shape != (len(index),) or not np.isfinite(temperatures).all():
+        raise ValueError("Les temperatures exteriors han d'estar completes i ser finites")
+    setpoint = float(thermal_config.get("heating_setpoint_c", 20.0))
+    degrees = np.maximum(setpoint - temperatures, 0.0)
+    if degrees.sum() == 0:
+        return np.zeros(len(index)), temperatures
+    annual_demand = annual_demand if thermal_config.get("heat_demand_mode", "annual_kwh") == "annual_kwh" else 0.0
+    heat_loss = float(thermal_config.get("building_heat_loss_kw_per_k", 0.0))
+    if thermal_config.get("heat_demand_mode", "annual_kwh") == "heat_loss_coefficient":
+        if not np.isfinite(heat_loss) or heat_loss <= 0:
+            raise ValueError("building_heat_loss_kw_per_k ha de ser positiu i finit")
+        annual_demand = heat_loss * degrees.sum()
+    heat = degrees / degrees.sum() * annual_demand
+    return heat, temperatures
+
+
+def _air_heat_pump_cop(outdoor_temp_c, thermal_config):
+    """Estima COP horari amb lift de temperatura i una corba climàtica configurable.
+
+    'cop' és COP en el punt de referència (per defecte A2/W35); la corba de Carnot
+    estima la variació amb temperatures, però no equival a un SCOP de fabricant.
+    Per a precisió de producte, cal introduir punts de rendiment certificats.
+    """
+    source = thermal_config.get("source_overrides", {}).get("aerotermia", {})
+    reference_cop = float(source.get("cop", 3.5))
+    reference_outdoor = float(source.get("scop_reference_outdoor_temp_c", 2.0))
+    reference_flow = float(source.get("scop_reference_flow_temp_c", 35.0))
+    flow_temp = float(source.get("flow_temp_c", reference_flow))
+    weather_compensation = float(source.get("weather_compensation_c_per_c", 0.0))
+    max_flow_temp = float(source.get("max_flow_temp_c", 55.0))
+    air_approach = float(source.get("air_heat_exchanger_approach_c", 5.0))
+    water_approach = float(source.get("water_heat_exchanger_approach_c", 5.0))
+    backup_bivalent_temp = source.get("backup_bivalent_temp_c")
+    temperatures = np.asarray(outdoor_temp_c, dtype=float)
+    compensated_flow = np.minimum(
+        max_flow_temp,
+        flow_temp + np.maximum(reference_outdoor - temperatures, 0.0) * weather_compensation,
+    )
+    reference_lift = (reference_flow + water_approach) - (reference_outdoor - air_approach)
+    actual_lift = (compensated_flow + water_approach) - (temperatures - air_approach)
+    cop = reference_cop * reference_lift / np.maximum(actual_lift, 1.0)
+    if backup_bivalent_temp is not None:
+        cop = np.where(temperatures < float(backup_bivalent_temp), 1.0, cop)
+    return np.clip(cop, 1.0, 8.0)
+
+
+def hourly_thermal_electricity_profile(index, thermal_config, outdoor_temp_c=None):
     """Genera la demanda termica i electrica horaria de la font activa."""
     source_key = thermal_config.get("active_source")
     if not source_key:
@@ -253,41 +360,41 @@ def hourly_thermal_electricity_profile(index, thermal_config):
         )
 
     annual_demand = float(thermal_config.get("annual_heat_demand_kwh", 0.0))
+    heat_demand, temperatures = _thermal_heat_profile(index, thermal_config, outdoor_temp_c)
     source_result = calculate_thermal_source(
-        annual_demand,
+        float(heat_demand.sum()),
         source_key,
         _source_runtime_config(source_key, thermal_config),
+        outdoor_temp_series=outdoor_temp_c,
     )
-    monthly_shape = {
-        1: 1.70, 2: 1.50, 3: 1.20, 4: 0.80, 5: 0.40, 6: 0.20,
-        7: 0.12, 8: 0.12, 9: 0.20, 10: 0.65, 11: 1.15, 12: 1.60,
-    }
-    hourly_shape = np.array([
-        0.70, 0.65, 0.60, 0.58, 0.60, 0.70, 0.90, 1.05,
-        0.95, 0.75, 0.60, 0.55, 0.55, 0.60, 0.65, 0.75,
-        0.90, 1.10, 1.30, 1.40, 1.35, 1.15, 0.95, 0.80,
-    ])
-    weights = np.array([
-        monthly_shape[timestamp.month] * hourly_shape[timestamp.hour]
-        for timestamp in index
-    ], dtype=float)
-    heat_demand = weights / weights.sum() * annual_demand if weights.any() else weights
-    electricity_ratio = (
-        source_result["electricity_total_kwh"] / annual_demand
-        if annual_demand and THERMAL_SOURCES[source_key].get("category") == "electricitat"
-        else 0.0
-    )
+    if source_result["category"] == "electricitat":
+        if source_key == "aerotermia" and temperatures is not None:
+            cop = _air_heat_pump_cop(temperatures, thermal_config)
+            electricity = heat_demand / cop
+        else:
+            electricity = heat_demand / max(float(source_result["performance"]), 1e-9)
+        electricity += heat_demand * float(
+            _source_runtime_config(source_key, thermal_config).get("auxiliary_electricity_kwh_per_heat_kwh", 0.0)
+        )
+        cop_series = np.divide(heat_demand, electricity, out=np.zeros_like(heat_demand), where=electricity > 0)
+    else:
+        electricity = heat_demand * float(
+            _source_runtime_config(source_key, thermal_config).get("auxiliary_electricity_kwh_per_heat_kwh", 0.0)
+        )
+        cop_series = np.zeros(len(index))
     return pd.DataFrame(
         {
             "thermal_heat_demand_kwh": heat_demand,
-            "thermal_electricity_kwh": heat_demand * electricity_ratio,
+            "thermal_electricity_kwh": electricity,
+            "thermal_cop": cop_series,
         },
         index=index,
     )
 
 
 def evaluate_electric_alternatives(
-    pv_series, base_load_series, thermal_config, battery_config, economy_config, lifecycle_config=None
+    pv_series, base_load_series, thermal_config, battery_config, economy_config,
+    lifecycle_config=None, outdoor_temp_series=None
 ):
     """Avalua fonts tèrmiques elèctriques aprofitant la FV i bateria existents."""
     results = []
@@ -299,11 +406,14 @@ def evaluate_electric_alternatives(
         if THERMAL_SOURCES[source_key].get("category") != "electricitat":
             continue
         source_settings = {**thermal_config, "active_source": source_key}
-        thermal_profile = hourly_thermal_electricity_profile(pv_series.index, source_settings)
+        thermal_profile = hourly_thermal_electricity_profile(
+            pv_series.index, source_settings, outdoor_temp_series
+        )
         source_result = calculate_thermal_source(
-            thermal_config.get("annual_heat_demand_kwh", 0.0),
+            float(thermal_profile["thermal_heat_demand_kwh"].sum()),
             source_key,
             _source_runtime_config(source_key, thermal_config),
+            outdoor_temp_series=outdoor_temp_series,
         )
         fixed_and_maintenance = source_result["annual_total_cost_eur"] - source_result["resource_cost_eur"] - source_result["auxiliary_energy_cost_eur"]
         load = base_load_series.reset_index(drop=True) + thermal_profile["thermal_electricity_kwh"].reset_index(drop=True)
@@ -363,7 +473,7 @@ def _input_energy_kwh(heat_demand_kwh, source):
     return heat_demand_kwh / performance
 
 
-def calculate_thermal_source(heat_demand_kwh, source_key, source_config=None):
+def calculate_thermal_source(heat_demand_kwh, source_key, source_config=None, outdoor_temp_series=None):
     """Calcula els indicadors anuals d'una font per una demanda termica util."""
     demand = float(heat_demand_kwh)
     if not np.isfinite(demand) or demand < 0:
@@ -404,14 +514,32 @@ def calculate_thermal_source(heat_demand_kwh, source_key, source_config=None):
 
     base_performance = float(source.get("cop", source.get("efficiency", 1.0)))
     effective_performance = base_performance
-    if source_key == "aerotermia":
+    if source_key == "aerotermia" and outdoor_temp_series is not None:
+        outdoor_values = np.asarray(outdoor_temp_series, dtype=float)
+        if not np.isfinite(outdoor_values).all():
+            raise ValueError("Les temperatures exteriors han de ser finites")
+        heating_setpoint = float(source.get("heating_setpoint_c", 20.0))
+        degree_hours = np.maximum(heating_setpoint - outdoor_values, 0.0)
+        heat_weights = (
+            degree_hours / degree_hours.sum() * demand
+            if degree_hours.sum() > 0 else np.zeros(len(outdoor_values))
+        )
+        cop_values = _air_heat_pump_cop(
+            outdoor_values, {"source_overrides": {"aerotermia": source}}
+        )
+        input_energy = float(np.sum(heat_weights / cop_values))
+        effective_performance = demand / input_energy if input_energy > 0 else base_performance
+    elif source_key == "aerotermia":
         effective_performance *= float(site_factors.get("air_source_cop_factor", 1.0))
     elif source_key == "geotermia":
         effective_performance *= float(site_factors.get("ground_source_cop_factor", 1.0))
 
     capex_per_kw = float(source.get("capex_eur_per_kw", 0.0))
 
-    input_energy = _input_energy_kwh(demand, {**source, "cop": effective_performance, "efficiency": effective_performance})
+    if source_key != "aerotermia" or outdoor_temp_series is None:
+        input_energy = _input_energy_kwh(
+            demand, {**source, "cop": effective_performance, "efficiency": effective_performance}
+        )
     auxiliary_electricity = demand * float(source.get("auxiliary_electricity_kwh_per_heat_kwh", 0.0))
     total_electricity = input_energy + auxiliary_electricity if source.get("category") == "electricitat" else auxiliary_electricity
     primary_total = (input_energy * float(source.get("primary_energy_factor", 1.0))) + auxiliary_electricity * float(source.get("auxiliary_primary_energy_factor", 1.95))
@@ -467,9 +595,18 @@ def calculate_thermal_source(heat_demand_kwh, source_key, source_config=None):
     }
 
 
-def compare_thermal_sources(heat_demand_kwh, thermal_config=None):
+def compare_thermal_sources(heat_demand_kwh, thermal_config=None, outdoor_temp_series=None):
     """Compara fonts i genera rànquings de cost, emissions i energia primària."""
     settings = thermal_config or {}
+    if settings.get("heat_demand_mode", "annual_kwh") == "heat_loss_coefficient":
+        if outdoor_temp_series is None:
+            raise ValueError("El mode UA·ΔT necessita temperatures exteriors horàries")
+        heat_loss = float(settings.get("building_heat_loss_kw_per_k", 0.0))
+        setpoint = float(settings.get("heating_setpoint_c", 20.0))
+        temperatures = np.asarray(outdoor_temp_series, dtype=float)
+        if not np.isfinite(heat_loss) or heat_loss <= 0 or not np.isfinite(temperatures).all():
+            raise ValueError("El coeficient UA i les temperatures horàries han de ser vàlids")
+        heat_demand_kwh = heat_loss * np.maximum(setpoint - temperatures, 0.0).sum()
     source_keys = settings.get("sources", list(THERMAL_SOURCES))
     if not source_keys or len(set(source_keys)) != len(source_keys):
         raise ValueError("La llista de fonts tèrmiques ha de ser no buida i sense duplicats")
@@ -482,12 +619,15 @@ def compare_thermal_sources(heat_demand_kwh, thermal_config=None):
         "peak_power_kw": settings.get("peak_power_kw", 8.0),
         "analysis_years": settings.get("analysis_years", 20),
         "location_config": location_config,
+        "heating_setpoint_c": settings.get("heating_setpoint_c", 20.0),
     }
     effective_overrides = {}
     for key in source_keys:
         effective_overrides[key] = {**common_settings, **source_overrides.get(key, {})}
     results = [
-        calculate_thermal_source(heat_demand_kwh, key, effective_overrides[key])
+        calculate_thermal_source(
+            heat_demand_kwh, key, effective_overrides[key], outdoor_temp_series=outdoor_temp_series
+        )
         for key in source_keys
     ]
     raw_weights = settings.get("weights", {"cost": 0.34, "environment": 0.33, "energy": 0.33})

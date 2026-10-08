@@ -38,16 +38,6 @@ from thermal import (
 def run():
     thermal_runtime_config = {**config.THERMAL, "location_config": config.LOCATION}
     thermal_summary = None
-    if config.THERMAL.get("enabled", False):
-        thermal_summary = compare_thermal_sources(
-            config.THERMAL["annual_heat_demand_kwh"], thermal_runtime_config
-        )
-        active_source = config.THERMAL.get("active_source")
-        thermal_summary["active_source"] = next(
-            (item for item in thermal_summary["sources"] if item["source_key"] == active_source),
-            None,
-        )
-        print_thermal_summary(thermal_summary)
 
     print("Generant/carregant perfil de consum...")
     custom_load = None
@@ -62,6 +52,7 @@ def run():
         config.PV_SYSTEM,
         database=config.PVGIS_DATABASE,
         target_hours=target_hours,
+        heating_setpoint_c=config.THERMAL.get("heating_setpoint_c", 18.0),
     )
     if custom_load is not None:
         load = custom_load
@@ -69,10 +60,23 @@ def run():
         load = default_hourly_consumption(config.CONSUMPTION["annual_kwh"], year=pv.index[0].year)
     print(
         f"Any PVGIS representatiu: {pv.attrs['pvgis_reference_year']} "
-        f"(mediana de {pv.attrs['pvgis_complete_years']} anys complets amb dades)"
+        f"(selecció conjunta FV/calefacció entre {pv.attrs['pvgis_complete_years']} anys complets)"
     )
 
     _validate_hourly_profiles(pv, load)
+    outdoor_temp = pv["outdoor_temp_c"] if "outdoor_temp_c" in pv else None
+    if config.THERMAL.get("enabled", False):
+        thermal_summary = compare_thermal_sources(
+            config.THERMAL["annual_heat_demand_kwh"],
+            thermal_runtime_config,
+            outdoor_temp_series=outdoor_temp,
+        )
+        active_source = config.THERMAL.get("active_source")
+        thermal_summary["active_source"] = next(
+            (item for item in thermal_summary["sources"] if item["source_key"] == active_source),
+            None,
+        )
+        print_thermal_summary(thermal_summary)
 
     pv_vals = pv["pv_kwh"].reset_index(drop=True)
     base_load_vals = load["load_kwh"].reset_index(drop=True)
@@ -84,13 +88,14 @@ def run():
             config.BATTERY,
             config.ECONOMY,
             config.LIFECYCLE,
+            outdoor_temp,
         )
         print_electric_alternatives_summary(thermal_summary["electric_alternatives_with_pv"])
     if config.THERMAL.get("enabled", False):
-        thermal_profile = hourly_thermal_electricity_profile(pv.index, thermal_runtime_config)
+        thermal_profile = hourly_thermal_electricity_profile(pv.index, thermal_runtime_config, outdoor_temp)
     else:
         thermal_profile = pd.DataFrame(
-            {"thermal_heat_demand_kwh": 0.0, "thermal_electricity_kwh": 0.0},
+            {"thermal_heat_demand_kwh": 0.0, "thermal_electricity_kwh": 0.0, "thermal_cop": 0.0},
             index=pv.index,
         )
     if thermal_summary and thermal_summary.get("active_source"):
@@ -99,6 +104,7 @@ def run():
         )
     thermal_heat_vals = thermal_profile["thermal_heat_demand_kwh"].reset_index(drop=True)
     thermal_electricity_vals = thermal_profile["thermal_electricity_kwh"].reset_index(drop=True)
+    thermal_cop_vals = thermal_profile["thermal_cop"].reset_index(drop=True)
     if len(thermal_electricity_vals) != len(pv_vals):
         raise ValueError("El perfil tèrmic no coincideix amb el nombre d'hores de PVGIS")
     n = len(pv_vals)
@@ -108,6 +114,7 @@ def run():
         "base_load_kwh": base_load_vals.iloc[:n].values,
         "thermal_heat_demand_kwh": thermal_heat_vals.iloc[:n].values,
         "thermal_electricity_kwh": thermal_electricity_vals.iloc[:n].values,
+        "thermal_cop": thermal_cop_vals.iloc[:n].values,
     })
     df["load_kwh"] = df["base_load_kwh"] + df["thermal_electricity_kwh"]
     df["surplus_kwh"] = df["pv_kwh"] - df["load_kwh"]

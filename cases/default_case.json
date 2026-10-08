@@ -72,12 +72,12 @@
     "initial_soc_pct": 50
   },
   "ECONOMY": {
-    "pv_cost_per_kw": 850.0,
-    "battery_cost_per_kwh": 280.0,
+    "pv_cost_per_kw": 1250.0,
+    "battery_cost_per_kwh": 650.0,
     "battery_cost_per_kw": 120.0,
     "installation_extra_pct": 0.12,
     "annual_om_pct": 0.015,
-    "electricity_buy_price_eur_kwh": 0.22,
+    "electricity_buy_price_eur_kwh": 0.2669,
     "electricity_sell_price_eur_kwh": 0.09,
     "annual_inflation_pct": 0.02,
     "discount_rate_pct": 0.04,

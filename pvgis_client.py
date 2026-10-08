@@ -18,9 +18,11 @@ import pandas as pd
 PVGIS_URL = "https://re.jrc.ec.europa.eu/api/v5_3/seriescalc"
 
 
-def get_hourly_pv_production(location, pv_system, database="PVGIS-SARAH3", target_hours=None):
+def get_hourly_pv_production(
+    location, pv_system, database="PVGIS-SARAH3", target_hours=None, heating_setpoint_c=18.0
+):
     """
-    Retorna l'any complet amb producció anual més propera a la mediana dels anys PVGIS.
+    Retorna l'any complet més representatiu de producció FV i graus-hora de calefacció.
 
     location: dict amb 'lat', 'lon'
     pv_system: dict amb 'peak_power_kwp', 'tilt_deg', 'azimuth_deg',
@@ -98,8 +100,30 @@ def get_hourly_pv_production(location, pv_system, database="PVGIS-SARAH3", targe
     annual_yields = np.array([year_data["pv_kwh"].sum() for year_data in complete_years], dtype=float)
     median_yield = float(np.median(annual_yields))
     selected_index = int(np.argmin(np.abs(annual_yields - median_yield)))
-    selected = complete_years[selected_index][["pv_kwh"]].copy()
+    selected_columns = ["pv_kwh"]
+    median_heating_degree_hours = None
+    if "T2m" in df.columns:
+        df["outdoor_temp_c"] = pd.to_numeric(df["T2m"], errors="coerce")
+        if df["outdoor_temp_c"].isna().any() or not np.isfinite(df["outdoor_temp_c"].to_numpy()).all():
+            raise ValueError("PVGIS ha retornat temperatures exteriors no vàlides")
+        complete_years = [
+            year_data.assign(outdoor_temp_c=df.loc[year_data.index, "outdoor_temp_c"])
+            for year_data in complete_years
+        ]
+        heating_degree_hours = np.array([
+            np.maximum(float(heating_setpoint_c) - year_data["outdoor_temp_c"], 0.0).sum()
+            for year_data in complete_years
+        ], dtype=float)
+        median_heating_degree_hours = float(np.median(heating_degree_hours))
+        pv_scale = max(float(np.median(np.abs(annual_yields - median_yield))), 1e-9)
+        heating_scale = max(float(np.median(np.abs(heating_degree_hours - median_heating_degree_hours))), 1e-9)
+        scores = ((annual_yields - median_yield) / pv_scale) ** 2
+        scores += ((heating_degree_hours - median_heating_degree_hours) / heating_scale) ** 2
+        selected_index = int(np.argmin(scores))
+        selected_columns.append("outdoor_temp_c")
+    selected = complete_years[selected_index][selected_columns].copy()
     selected.attrs["pvgis_reference_year"] = int(selected.index[0].year)
     selected.attrs["pvgis_complete_years"] = len(complete_years)
     selected.attrs["pvgis_median_annual_yield_kwh"] = median_yield
+    selected.attrs["pvgis_median_heating_degree_hours"] = median_heating_degree_hours
     return selected

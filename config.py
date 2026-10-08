@@ -67,6 +67,8 @@ THERMAL = {
     "peak_power_kw": 8.0,
     "analysis_years": 20,
     "heating_setpoint_c": 22.0,                # temperatura de consigna a l'interior a l'hivern
+    "heat_demand_mode": "annual_kwh",          # annual_kwh mesurat o heat_loss_coefficient estimat
+    "building_heat_loss_kw_per_k": 0.25,       # kW/K; estimar amb factures o calcul termic
     "ground_loop_target_temp_c": 8.0,         # temperatura de treball del circuit de terra
     "borehole_diameter_m": 0.12,              # diàmetre de la sonda geotèrmica
     "groundwater_level_m": 5.0,              # nivell freàtic estimat; útil per a criteris geològics
@@ -103,12 +105,12 @@ BATTERY = {
 # 7. ECONOMIA
 # ---------------------------------------------------------------------------
 ECONOMY = {
-    "pv_cost_per_kw": 850.0,                       # €/kWp instal.lat
-    "battery_cost_per_kwh": 280.0,                # €/kWh de capacitat
+    "pv_cost_per_kw": 1250.0,                     # €/kWp abans d'extres; IEA-PVPS ES 2023: sistema 5-10 kW, 1.4 €/W instal·lat
+    "battery_cost_per_kwh": 650.0,                # €/kWh; hipòtesi ajustable, EUPD alemany 2025 H1 ~711 €/kWh
     "battery_cost_per_kw": 120.0,                 # €/kW de potència de bateries
     "installation_extra_pct": 0.12,               # cost addicional (BOS, inversors, obra, permisos)
     "annual_om_pct": 0.015,                       # manteniment anual (% del CAPEX)
-    "electricity_buy_price_eur_kwh": 0.22,        # preu mitja de compra de la llum
+    "electricity_buy_price_eur_kwh": 0.2669,      # Eurostat ES household 2025-S2, 2.5-5 MWh band, taxes included
     "electricity_sell_price_eur_kwh": 0.09,       # preu mitja de venda de l'excedent
     "annual_inflation_pct": 0.02,                 # inflacio anual aplicada al valor de l'energia
     "discount_rate_pct": 0.04,                    # taxa de descompte per VAN

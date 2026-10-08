@@ -1500,7 +1500,7 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
 <body>
   <div class="top-header">
     <h1>Informe integral d'energia, climatització i sostenibilitat</h1>
-    <div class="subtitle">Generat amb l'any PVGIS {summary.get('pvgis_reference_year', 'no indicat')}, triat perquè la seva producció anual és la més propera a la mediana de {summary.get('pvgis_complete_years', 1)} anys complets disponibles, i amb el perfil de consum configurat.</div>
+    <div class="subtitle">Generat amb l'any PVGIS {summary.get('pvgis_reference_year', 'no indicat')}, triat com a any representatiu de producció FV i graus-hora de calefacció entre {summary.get('pvgis_complete_years', 1)} anys complets disponibles, i amb el perfil de consum configurat.</div>
   </div>
 
   {_system_summary_section(config)}
