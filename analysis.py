@@ -5,6 +5,7 @@ dimensionament de la bateria (capacitat en kWh vs potencia en kW).
 """
 import numpy as np
 import pandas as pd
+from battery import simulate_battery_series
 
 SEASON_MONTHS = {
     "Hivern": [12, 1, 2],
@@ -43,8 +44,9 @@ def daily_summary(df):
         daily["power_limited_discharge"] = df.groupby("day")["limited_by_power_discharge"].any()
 
     daily["self_consumed_kwh"] = daily["pv_kwh"] - daily["grid_export_kwh"]
+    daily["load_served_locally_kwh"] = (daily["load_kwh"] - daily["grid_import_kwh"]).clip(lower=0)
     daily["self_sufficiency_pct"] = np.where(
-        daily["load_kwh"] > 0, daily["self_consumed_kwh"] / daily["load_kwh"] * 100, 0.0
+        daily["load_kwh"] > 0, daily["load_served_locally_kwh"] / daily["load_kwh"] * 100, 0.0
     )
     return daily
 
@@ -53,8 +55,9 @@ def monthly_summary(df):
     agg = {"pv_kwh": "sum", "load_kwh": "sum", "grid_export_kwh": "sum", "grid_import_kwh": "sum"}
     monthly = df.groupby("month").agg(agg)
     monthly["self_consumed_kwh"] = monthly["pv_kwh"] - monthly["grid_export_kwh"]
+    monthly["load_served_locally_kwh"] = (monthly["load_kwh"] - monthly["grid_import_kwh"]).clip(lower=0)
     monthly["self_sufficiency_pct"] = np.where(
-        monthly["load_kwh"] > 0, monthly["self_consumed_kwh"] / monthly["load_kwh"] * 100, 0.0
+        monthly["load_kwh"] > 0, monthly["load_served_locally_kwh"] / monthly["load_kwh"] * 100, 0.0
     )
     monthly["self_consumption_pct"] = np.where(
         monthly["pv_kwh"] > 0, monthly["self_consumed_kwh"] / monthly["pv_kwh"] * 100, 0.0
@@ -72,14 +75,16 @@ def compute_summary(df):
     total_export = float(df["grid_export_kwh"].sum())
     total_import = float(df["grid_import_kwh"].sum())
     self_consumed = total_pv - total_export
+    load_served_locally = max(total_load - total_import, 0.0)
     return {
         "total_pv": total_pv,
         "total_load": total_load,
         "total_export": total_export,
         "total_import": total_import,
         "self_consumed": self_consumed,
+        "load_served_locally": load_served_locally,
         "self_consumption_rate": (self_consumed / total_pv * 100) if total_pv else 0.0,
-        "self_sufficiency_rate": (self_consumed / total_load * 100) if total_load else 0.0,
+        "self_sufficiency_rate": (load_served_locally / total_load * 100) if total_load else 0.0,
     }
 
 
@@ -98,10 +103,12 @@ def compute_economic_summary(summary, pv_peak_kwp, battery_config, economic_conf
     buy_price = float(economic_config.get("electricity_buy_price_eur_kwh", 0.0))
     sell_price = float(economic_config.get("electricity_sell_price_eur_kwh", 0.0))
 
-    annual_energy_saving = summary["self_consumed"] * buy_price
+    annual_energy_saving = max(float(summary["total_load"]) - float(summary["total_import"]), 0.0) * buy_price
     annual_export_revenue = summary["total_export"] * sell_price
     annual_grid_cost = summary["total_import"] * buy_price
-    annual_bill_saving = annual_energy_saving + annual_export_revenue - annual_grid_cost
+    # Estalvi respecte a comprar tota la càrrega de xarxa: energia local útil
+    # més ingressos d'exportació. No es torna a restar la factura real.
+    annual_bill_saving = annual_energy_saving + annual_export_revenue
     annual_om = capex_total * float(economic_config.get("annual_om_pct", 0.0))
     annual_cashflow = annual_bill_saving - annual_om
 
@@ -117,6 +124,8 @@ def compute_economic_summary(summary, pv_peak_kwp, battery_config, economic_conf
         panel_life = int(lifecycle_config.get("panel_life_years", 25))
         battery_life = int(lifecycle_config.get("battery_life_years", 10))
         inverter_life = int(lifecycle_config.get("inverter_life_years", 12))
+        if panel_life <= 0 or not 0 <= degradation < 1:
+            raise ValueError("La vida útil dels panells ha de ser positiva i la degradació ha d'estar entre 0% i 100%")
 
         inverter_kw = max(float(pv_peak_kwp), 1.0)
         inverter_replacement_cost = inverter_kw * float(lifecycle_config.get("inverter_cost_per_kw", 0.0))
@@ -132,20 +141,30 @@ def compute_economic_summary(summary, pv_peak_kwp, battery_config, economic_conf
     discount_rate = float(economic_config.get("discount_rate_pct", 0.0))
     project_life = int(economic_config.get("project_life_years", 25))
     inflation = float(economic_config.get("annual_inflation_pct", 0.0))
-    future_cashflow = annual_cashflow
-    npv_25y = 0.0
-    for year in range(1, project_life + 1):
-        future_cashflow = annual_cashflow * ((1.0 + inflation) ** (year - 1))
-        npv_25y += future_cashflow / ((1.0 + discount_rate) ** year)
-    npv_25y -= capex_total
+    if project_life <= 0:
+        raise ValueError("La vida del projecte ha de ser d'almenys un any")
+    if discount_rate <= -1 or inflation <= -1:
+        raise ValueError("La taxa de descompte i la inflació han de ser superiors a -100%")
 
     lifecycle_replacements = []
     if lifecycle_config:
+        if battery_life <= 0 or inverter_life <= 0:
+            raise ValueError("La vida útil de la bateria i de l'inversor ha de ser positiva")
         for replacement_year in range(1, project_life + 1):
             if replacement_year % battery_life == 0 and battery_config and battery_config.get("enabled", False):
                 lifecycle_replacements.append({"year": replacement_year, "type": "Bateria", "cost": battery_replacement_cost})
             if replacement_year % inverter_life == 0:
                 lifecycle_replacements.append({"year": replacement_year, "type": "Inversor", "cost": inverter_replacement_cost})
+
+    replacement_costs_by_year = {}
+    for replacement in lifecycle_replacements:
+        year = replacement["year"]
+        replacement_costs_by_year[year] = replacement_costs_by_year.get(year, 0.0) + replacement["cost"]
+    npv_25y = -capex_total
+    for year in range(1, project_life + 1):
+        annual_cashflow_year = annual_cashflow * ((1.0 + inflation) ** (year - 1))
+        replacement_cost = replacement_costs_by_year.get(year, 0.0) * ((1.0 + inflation) ** (year - 1))
+        npv_25y += (annual_cashflow_year - replacement_cost) / ((1.0 + discount_rate) ** year)
 
     lifecycle_impact = {
         "panel_degradation_pct_per_year": degradation,
@@ -157,13 +176,14 @@ def compute_economic_summary(summary, pv_peak_kwp, battery_config, economic_conf
         "replacements": lifecycle_replacements,
     }
 
-    annual_production_with_degradation = summary["total_pv"]
-    if lifecycle_config:
-        annual_production_with_degradation = summary["total_pv"] * ((1.0 - degradation) ** (panel_life - 1))
+    annual_production_at_project_end = summary["total_pv"] * ((1.0 - degradation) ** (project_life - 1))
 
     return {
         "pv_capex": pv_capex,
+        "pv_cost_per_kw": float(economic_config.get("pv_cost_per_kw", 0.0)),
         "battery_capex": battery_capex,
+        "battery_cost_per_kwh": float(economic_config.get("battery_cost_per_kwh", 0.0)),
+        "battery_cost_per_kw": float(economic_config.get("battery_cost_per_kw", 0.0)),
         "installation_extra": installation_extra,
         "capex_total": capex_total,
         "battery_power_kw": battery_power_kw,
@@ -176,9 +196,12 @@ def compute_economic_summary(summary, pv_peak_kwp, battery_config, economic_conf
         "annual_om": annual_om,
         "annual_cashflow": annual_cashflow,
         "payback_years": payback_years,
+        "npv": npv_25y,
         "npv_25y": npv_25y,
+        "project_life_years": project_life,
         "panel_degradation_pct_per_year": degradation,
-        "annual_production_year_25": annual_production_with_degradation,
+        "annual_production_end_of_project": annual_production_at_project_end,
+        "annual_production_year_25": annual_production_at_project_end,
         "lifecycle_impact": lifecycle_impact,
     }
 
@@ -232,7 +255,15 @@ def compute_combined_economic_summary(thermal_summary, economic_summary, economi
         npv = -incremental_capex
         total_replacement_cost = 0.0
         for year in range(1, project_life + 1):
-            saving_year = annual_saving * ((1.0 + inflation) ** (year - 1))
+            inflation_factor = (1.0 + inflation) ** (year - 1)
+            reference_cost_year = reference_annual_cost * inflation_factor
+            lifecycle_costs = alternative.get("lifecycle_system_costs_eur")
+            system_cost_year = (
+                float(lifecycle_costs[year - 1])
+                if lifecycle_costs and year <= len(lifecycle_costs)
+                else float(alternative.get("system_energy_cost_eur", 0.0)) * inflation_factor
+            )
+            saving_year = reference_cost_year - system_cost_year - annual_pv_om * inflation_factor
             replacement_cost = replacement_costs_by_year.get(year, 0.0) * ((1.0 + inflation) ** (year - 1))
             cumulative_saving += saving_year
             total_replacement_cost += replacement_cost
@@ -285,13 +316,16 @@ def compute_combined_economic_summary(thermal_summary, economic_summary, economi
     }
 
 
-def compute_lifecycle_environmental_summary(summary, pv_peak_kwp, battery_config, lifecycle_config):
+def compute_lifecycle_environmental_summary(
+    summary, pv_peak_kwp, battery_config, lifecycle_config, hourly_df=None, lifecycle_projection=None
+):
     if not lifecycle_config:
         return {
             "embodied_co2_kg": 0.0,
             "co2_saved_kg_over_life": 0.0,
             "avoided_co2_per_year_kg": 0.0,
             "net_co2_kg": 0.0,
+            "panel_life_years": 0,
         }
 
     pv_embodied = float(pv_peak_kwp) * float(lifecycle_config.get("pv_embodied_co2_kg_per_kwp", 0.0))
@@ -302,15 +336,26 @@ def compute_lifecycle_environmental_summary(summary, pv_peak_kwp, battery_config
     inverter_embodied = inverter_kw * float(lifecycle_config.get("inverter_embodied_co2_kg_per_kw", 0.0))
 
     embodied_co2 = pv_embodied + battery_embodied + inverter_embodied
-    annual_self_consumed_kwh = float(summary.get("self_consumed", 0.0))
+    annual_displaced_grid_kwh = (
+        float(summary.get("load_served_locally", 0.0)) + float(summary.get("total_export", 0.0))
+    )
     grid_factor = float(lifecycle_config.get("grid_emission_factor_kg_co2_per_kwh", 0.0))
-    avoided_co2_per_year = annual_self_consumed_kwh * grid_factor
+    avoided_co2_per_year = annual_displaced_grid_kwh * grid_factor
     life_years = int(lifecycle_config.get("panel_life_years", 25))
     degradation = float(lifecycle_config.get("panel_degradation_pct_per_year", 0.0))
+    if life_years <= 0 or not 0 <= degradation < 1:
+        raise ValueError("La vida útil dels panells ha de ser positiva i la degradació ha d'estar entre 0% i 100%")
     co2_saved_over_life = 0.0
+    projected_co2 = (lifecycle_projection or {}).get("avoided_co2_kg", [])
     for year in range(1, life_years + 1):
-        effective_self_consumed = annual_self_consumed_kwh * ((1.0 - degradation) ** (year - 1))
-        co2_saved_over_life += effective_self_consumed * grid_factor
+        if year <= len(projected_co2):
+            co2_saved_over_life += projected_co2[year - 1]
+        else:
+            energy_flows = _year_energy_flows(
+                summary, (1.0 - degradation) ** (year - 1), hourly_df, battery_config
+            )
+            displaced_grid_kwh = energy_flows["load_served_locally"] + energy_flows["grid_export"]
+            co2_saved_over_life += displaced_grid_kwh * grid_factor
 
     net_co2 = embodied_co2 - co2_saved_over_life
     return {
@@ -318,10 +363,11 @@ def compute_lifecycle_environmental_summary(summary, pv_peak_kwp, battery_config
         "co2_saved_kg_over_life": co2_saved_over_life,
         "avoided_co2_per_year_kg": avoided_co2_per_year,
         "net_co2_kg": net_co2,
+        "panel_life_years": life_years,
     }
 
 
-def compute_lifecycle_projection(summary, pv_peak_kwp, battery_config, economic_config, lifecycle_config):
+def compute_lifecycle_projection(summary, pv_peak_kwp, battery_config, economic_config, lifecycle_config, hourly_df=None):
     if not lifecycle_config:
         return {
             "years": [],
@@ -341,6 +387,14 @@ def compute_lifecycle_projection(summary, pv_peak_kwp, battery_config, economic_
     sell_price = float(economic_config.get("electricity_sell_price_eur_kwh", 0.0))
     annual_om_pct = float(economic_config.get("annual_om_pct", 0.0))
     grid_factor = float(lifecycle_config.get("grid_emission_factor_kg_co2_per_kwh", 0.0))
+    inflation = float(economic_config.get("annual_inflation_pct", 0.0))
+    if project_life <= 0:
+        raise ValueError("La vida del projecte ha de ser d'almenys un any")
+    if not 0 <= degradation < 1:
+        raise ValueError("La degradació anual dels panells ha d'estar entre 0% i 100%")
+    discount_rate = float(economic_config.get("discount_rate_pct", 0.0))
+    if discount_rate <= -1 or inflation <= -1:
+        raise ValueError("La taxa de descompte i la inflació han de ser superiors a -100%")
 
     pv_capex = float(pv_peak_kwp) * float(economic_config.get("pv_cost_per_kw", 0.0))
     battery_capex = 0.0
@@ -354,16 +408,13 @@ def compute_lifecycle_projection(summary, pv_peak_kwp, battery_config, economic_
 
     battery_life = int(lifecycle_config.get("battery_life_years", 10))
     inverter_life = int(lifecycle_config.get("inverter_life_years", 12))
+    if battery_life <= 0 or inverter_life <= 0:
+        raise ValueError("La vida útil de la bateria i de l'inversor ha de ser positiva")
     inverter_cost = max(float(pv_peak_kwp), 1.0) * float(lifecycle_config.get("inverter_cost_per_kw", 0.0))
     battery_replacement_cost = 0.0
     if battery_config and battery_config.get("enabled", False):
         battery_replacement_cost = float(battery_config.get("capacity_kwh", 0.0)) * float(economic_config.get("battery_cost_per_kwh", 0.0))
         battery_replacement_cost += battery_power_kw * float(economic_config.get("battery_cost_per_kw", 0.0))
-
-    base_production = float(summary.get("total_pv", 0.0))
-    base_self_consumed = float(summary.get("self_consumed", 0.0))
-    base_export = float(summary.get("total_export", 0.0))
-    base_import = float(summary.get("total_import", 0.0))
 
     years = list(range(1, project_life + 1))
     annual_production = []
@@ -377,22 +428,25 @@ def compute_lifecycle_projection(summary, pv_peak_kwp, battery_config, economic_
 
     running_cash = -capex_total
     for year in years:
-        production = base_production * ((1.0 - degradation) ** (year - 1))
-        self_consumed = base_self_consumed * ((1.0 - degradation) ** (year - 1))
-        export = base_export * ((1.0 - degradation) ** (year - 1))
-        if base_self_consumed > 0:
-            import_ratio = max(1.0 - (self_consumed / base_self_consumed), 0.0)
-        else:
-            import_ratio = 0.0
-        import_kwh = max(base_import * (1.0 + import_ratio), 0.0)
-        annual_om = capex_total * annual_om_pct
+        energy_flows = _year_energy_flows(
+            summary, (1.0 - degradation) ** (year - 1), hourly_df, battery_config
+        )
+        production = energy_flows["production"]
+        self_consumed = energy_flows["self_consumed"]
+        export = energy_flows["grid_export"]
+        import_kwh = energy_flows["grid_import"]
+        inflation_factor = (1.0 + inflation) ** (year - 1)
+        annual_saving = (
+            energy_flows["load_served_locally"] * buy_price + export * sell_price
+        ) * inflation_factor
+        annual_om = capex_total * annual_om_pct * inflation_factor
         replacement = 0.0
         if battery_config and battery_config.get("enabled", False) and year % battery_life == 0:
-            replacement += battery_replacement_cost
+            replacement += battery_replacement_cost * inflation_factor
         if year % inverter_life == 0:
-            replacement += inverter_cost
+            replacement += inverter_cost * inflation_factor
 
-        bill_saving = self_consumed * buy_price + export * sell_price - import_kwh * buy_price
+        bill_saving = annual_saving
         cashflow_year = bill_saving - annual_om - replacement
         running_cash += cashflow_year
 
@@ -403,7 +457,7 @@ def compute_lifecycle_projection(summary, pv_peak_kwp, battery_config, economic_
         annual_bill_saving.append(bill_saving)
         annual_cashflow.append(cashflow_year)
         cumulative_cashflow.append(running_cash)
-        avoided_co2.append(production * grid_factor)
+        avoided_co2.append((energy_flows["load_served_locally"] + export) * grid_factor)
 
     return {
         "years": years,
@@ -418,6 +472,64 @@ def compute_lifecycle_projection(summary, pv_peak_kwp, battery_config, economic_
         "capex_total": capex_total,
         "project_life_years": project_life,
         "cashflow_years": [0] + years,
+        "npv": -capex_total + sum(
+            cashflow / ((1.0 + discount_rate) ** year)
+            for year, cashflow in zip(years, annual_cashflow)
+        ),
+    }
+
+
+def _year_energy_flows(summary, production_factor, hourly_df=None, battery_config=None):
+    """Recalcula l'any amb la sèrie horària; usa una aproximació només si no es disposa de la sèrie."""
+    if hourly_df is None:
+        return _project_energy_flows(summary, production_factor)
+
+    pv = hourly_df["pv_kwh"].astype(float) * production_factor
+    load = hourly_df["load_kwh"].astype(float)
+    surplus = pv - load
+    if battery_config and battery_config.get("enabled", False):
+        battery = simulate_battery_series(surplus, battery_config)
+        grid_import = battery["grid_import_kwh"]
+        grid_export = battery["grid_export_kwh"]
+    else:
+        grid_import = (-surplus).clip(lower=0)
+        grid_export = surplus.clip(lower=0)
+
+    total_load = float(load.sum())
+    total_import = float(grid_import.sum())
+    total_pv = float(pv.sum())
+    total_export = float(grid_export.sum())
+    return {
+        "production": total_pv,
+        "self_consumed": total_pv - total_export,
+        "grid_export": total_export,
+        "grid_import": total_import,
+        "load_served_locally": max(total_load - total_import, 0.0),
+    }
+
+
+def _project_energy_flows(summary, production_factor):
+    """Aproxima els fluxos futurs reduint primer l'excedent exportat i després l'energia útil local."""
+    base_production = max(float(summary.get("total_pv", 0.0)), 0.0)
+    total_load = max(float(summary.get("total_load", 0.0)), 0.0)
+    base_export = max(float(summary.get("total_export", 0.0)), 0.0)
+    base_import = max(float(summary.get("total_import", 0.0)), 0.0)
+    base_self_consumed = max(float(summary.get("self_consumed", base_production - base_export)), 0.0)
+    factor = max(float(production_factor), 0.0)
+    production = base_production * factor
+    production_loss = max(base_production - production, 0.0)
+    lost_export = min(production_loss, base_export)
+    grid_export = max(base_export - lost_export, 0.0)
+    self_consumed = max(base_self_consumed - max(production_loss - base_export, 0.0), 0.0)
+    import_increase = max(production_loss - base_export, 0.0)
+    grid_import = min(total_load, base_import + import_increase)
+    load_served_locally = max(total_load - grid_import, 0.0)
+    return {
+        "production": production,
+        "self_consumed": self_consumed,
+        "grid_export": grid_export,
+        "grid_import": grid_import,
+        "load_served_locally": load_served_locally,
     }
 
 
@@ -487,6 +599,7 @@ def battery_sizing_diagnostics(df, daily, battery_config):
 
     return {
         "n_days": n_days,
+        "max_soc_pct": float(battery_config.get("max_soc_pct", 100.0)),
         "n_saturated_days": n_saturated_days,
         "n_empty_days": n_empty_days,
         "n_power_charge_days": n_power_charge_days,

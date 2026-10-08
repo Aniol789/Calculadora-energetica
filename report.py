@@ -1388,7 +1388,7 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
         battery_html = f"""
         <h2>Dimensionament de la bateria</h2>
         <div class="kpi-grid">
-          {_kpi("Dies bateria saturada (100%)", battery_diag['n_saturated_days'], "warn")}
+          {_kpi(f"Dies bateria saturada ({battery_diag.get('max_soc_pct', 100):.0f}%)", battery_diag['n_saturated_days'], "warn")}
           {_kpi("Dies bateria buida", battery_diag['n_empty_days'], "danger")}
           {_kpi("Dies limitats per potencia carrega", battery_diag['n_power_charge_days'], "warn")}
           {_kpi("Dies limitats per potencia descarrega", battery_diag['n_power_discharge_days'], "warn")}
@@ -1399,6 +1399,9 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
         <div class="reco">{battery_diag['recommendation']}</div>
         """
 
+    project_life_years = economic_summary.get("project_life_years", 25)
+    lifecycle_impact = economic_summary.get("lifecycle_impact", {})
+    panel_life_years = lifecycle_impact.get("panel_life_years", 25)
     payback_text = "No viable econòmicament" if economic_summary["payback_years"] is None else f"{economic_summary['payback_years']:.1f} anys"
     economic_html = f"""
     <h2>Analisi econòmica</h2>
@@ -1409,16 +1412,15 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
       {_kpi("Estalvi anual", f"{economic_summary['annual_bill_saving']:.0f} €/any", "accent2")}
       {_kpi("Flux net anual", f"{economic_summary['annual_cashflow']:.0f} €/any", "warn")}
       {_kpi("Payback", payback_text, "warn")}
-      {_kpi("VAN 25 anys", f"{economic_summary['npv_25y']:.0f} €", "accent2")}
+      {_kpi(f"VAN {economic_summary.get('project_life_years', 25)} anys", f"{economic_summary.get('npv', economic_summary['npv_25y']):.0f} €", "accent2")}
       {_kpi("Compra mitjana llum", f"{economic_summary['buy_price']:.2f} €/kWh")}
       {_kpi("Venda excedents", f"{economic_summary['sell_price']:.2f} €/kWh")}
     </div>
     <div class="reco">
-      Supòsits utilitzats: cost de plaques de {economic_summary['pv_capex'] / max(summary['total_pv'] / 1000, 1):.0f} €/kWp, cost de bateries de {economic_summary['battery_capex'] / max(economic_summary['battery_power_kw'], 1):.0f} €/kW, preu de compra {economic_summary['buy_price']:.2f} €/kWh, preu de venda {economic_summary['sell_price']:.2f} €/kWh, manteniment anual {economic_summary['annual_om']:.0f} € i vida útil de 25 anys.
+      Supòsits utilitzats: cost fotovoltaic de {economic_summary.get('pv_cost_per_kw', 0):.0f} €/kWp, bateria de {economic_summary.get('battery_cost_per_kwh', 0):.0f} €/kWh i {economic_summary.get('battery_cost_per_kw', 0):.0f} €/kW, preu de compra {economic_summary['buy_price']:.2f} €/kWh, preu de venda {economic_summary['sell_price']:.2f} €/kWh, manteniment anual {economic_summary['annual_om']:.0f} € i horitzó del projecte de {project_life_years} anys.
     </div>
     """
 
-    lifecycle_impact = economic_summary.get("lifecycle_impact", {})
     replacements = lifecycle_impact.get("replacements", [])
     replacement_lines = "Cap substitució prevista en el període analitzat." if not replacements else "; ".join(
         f"{entry['type']} a l'any {entry['year']} ({entry['cost']:.0f} €)" for entry in replacements
@@ -1433,18 +1435,18 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
       {_kpi("Vida útil inversor", f"{economic_summary.get('lifecycle_impact', {}).get('inverter_life_years', 12)} anys")}
       {_kpi("Cost substitució bateria", f"{economic_summary.get('lifecycle_impact', {}).get('battery_replacement_cost', 0):.0f} €")}
       {_kpi("Cost substitució inversor", f"{economic_summary.get('lifecycle_impact', {}).get('inverter_replacement_cost', 0):.0f} €")}
-      {_kpi("Producció estimada any 25", f"{economic_summary.get('annual_production_year_25', 0):.0f} kWh")}
+      {_kpi(f"Producció estimada any {project_life_years}", f"{economic_summary.get('annual_production_end_of_project', economic_summary.get('annual_production_year_25', 0)):.0f} kWh")}
       {_kpi("Emissions incorporades", f"{environmental_summary.get('embodied_co2_kg', 0):.0f} kg CO2e")}
     </div>
     <div class="reco">
-      En un horitzó de 25 anys, les plaques perden eficiència de manera gradual; el càlcul inclou una degradació anual de {economic_summary.get('panel_degradation_pct_per_year', 0) * 100:.2f}% i la necessitat de substituir bateria/inversor segons la vida útil estimada. La producció neta del sistema disminueix amb els anys, i el balanç econòmic final s’ha de valorar incloent aquests reemplaçaments. Substitucions previstes: {replacement_lines}. Pel que fa a l'impacte ambiental, el sistema evita aproximadament {environmental_summary.get('co2_saved_kg_over_life', 0):.0f} kg CO2e al llarg de la vida útil, amb un balanç net de {environmental_summary.get('net_co2_kg', 0):.0f} kg CO2e després de comptabilitzar les emissions incorporades en fabricació.
+      En l'horitzó del projecte de {project_life_years} anys, les plaques perden eficiència de manera gradual; el càlcul inclou una degradació anual de {economic_summary.get('panel_degradation_pct_per_year', 0) * 100:.2f}% i les substitucions estimades de bateria/inversor. Substitucions previstes: {replacement_lines}. Pel que fa a l'impacte ambiental, s'estima que el sistema evita {environmental_summary.get('co2_saved_kg_over_life', 0):.0f} kg CO2e al llarg dels {environmental_summary.get('panel_life_years', panel_life_years)} anys de vida útil dels panells, amb un balanç net de {environmental_summary.get('net_co2_kg', 0):.0f} kg CO2e després de comptabilitzar les emissions incorporades.
     </div>
     """
 
     fig_cashflow = go.Figure()
     fig_cashflow.add_scatter(x=lifecycle_projection.get("cashflow_years", [0]), y=lifecycle_projection.get("cumulative_cashflow_eur", [0]),
                             mode="lines+markers", name="Flux de caixa acumulat", line=dict(color="#38bdf8", width=3))
-    fig_cashflow.update_layout(template="plotly_dark", title="Flux de caixa acumulat de la instal·lació (25 anys)",
+    fig_cashflow.update_layout(template="plotly_dark", title=f"Flux de caixa acumulat de la instal·lació ({project_life_years} anys)",
                                xaxis_title="Any", yaxis_title="€ acumulat", height=360)
 
     years = lifecycle_projection.get("years", [])
@@ -1453,12 +1455,12 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
 
     fig_production_lifecycle = go.Figure()
     fig_production_lifecycle.add_scatter(x=years, y=prod, mode="lines+markers", name="Producció anual", line=dict(color="#34d399", width=3))
-    fig_production_lifecycle.update_layout(template="plotly_dark", title="Producció anual durant la vida útil (25 anys)",
+    fig_production_lifecycle.update_layout(template="plotly_dark", title=f"Producció anual durant el projecte ({project_life_years} anys)",
                                           xaxis_title="Any", yaxis_title="kWh/any", height=360)
 
     fig_emissions_lifecycle = go.Figure()
     fig_emissions_lifecycle.add_scatter(x=years, y=saved_co2, mode="lines+markers", name="CO2 evitat anual", line=dict(color="#fbbf24", width=3))
-    fig_emissions_lifecycle.update_layout(template="plotly_dark", title="Estalvi d'emissions evitades per energia solar (25 anys)",
+    fig_emissions_lifecycle.update_layout(template="plotly_dark", title=f"Emissions evitades anuals durant el projecte ({project_life_years} anys)",
                                          xaxis_title="Any", yaxis_title="kg CO2eq/any", height=360)
 
     thermal_charts_html = _thermal_charts(thermal_summary)
@@ -1481,14 +1483,14 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
     """
 
     lifecycle_kpis = f"""
-    <h2>Indicadors de la vida útil (25 anys)</h2>
+    <h2>Indicadors del projecte ({project_life_years} anys)</h2>
     <div class="kpi-grid">
       {_kpi("Producció total estimada", f"{sum(lifecycle_projection.get('annual_production_kwh', [])):.0f} kWh")}
-      {_kpi("CO2 evitat total", f"{environmental_summary.get('co2_saved_kg_over_life', 0):.0f} kg CO2e")}
-      {_kpi("VAN 25 anys", f"{economic_summary['npv_25y']:.0f} €", "accent2")}
+      {_kpi(f"CO2 evitat en {environmental_summary.get('panel_life_years', panel_life_years)} anys", f"{environmental_summary.get('co2_saved_kg_over_life', 0):.0f} kg CO2e")}
+      {_kpi(f"VAN {economic_summary.get('project_life_years', 25)} anys", f"{economic_summary.get('npv', economic_summary['npv_25y']):.0f} €", "accent2")}
       {_kpi("Flux caixa acumulat final", f"{lifecycle_projection.get('cumulative_cashflow_eur', [])[-1]:.0f} €", "warn")}
-      {_kpi("Producció any 25", f"{lifecycle_projection.get('annual_production_kwh', [0])[-1]:.0f} kWh")}
-      {_kpi("CO2 evitat any 25", f"{lifecycle_projection.get('avoided_co2_kg', [0])[-1]:.0f} kg CO2e")}
+      {_kpi(f"Producció any {project_life_years}", f"{lifecycle_projection.get('annual_production_kwh', [0])[-1]:.0f} kWh")}
+      {_kpi(f"CO2 evitat any {project_life_years}", f"{lifecycle_projection.get('avoided_co2_kg', [0])[-1]:.0f} kg CO2e")}
     </div>
     """
 
@@ -1498,7 +1500,7 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
 <body>
   <div class="top-header">
     <h1>Informe integral d'energia, climatització i sostenibilitat</h1>
-    <div class="subtitle">Generat automaticament a partir de dades PVGIS i del perfil de consum configurat.</div>
+    <div class="subtitle">Generat amb l'any PVGIS {summary.get('pvgis_reference_year', 'no indicat')}, triat perquè la seva producció anual és la més propera a la mediana de {summary.get('pvgis_complete_years', 1)} anys complets disponibles, i amb el perfil de consum configurat.</div>
   </div>
 
   {_system_summary_section(config)}

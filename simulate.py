@@ -14,6 +14,7 @@ import unicodedata
 from datetime import datetime
 import webbrowser
 
+import numpy as np
 import pandas as pd
 
 import config
@@ -48,14 +49,30 @@ def run():
         )
         print_thermal_summary(thermal_summary)
 
-    print(f"Obtenint dades de produccio PV de PVGIS per '{config.LOCATION['name']}'...")
-    pv = get_hourly_pv_production(config.LOCATION, config.PV_SYSTEM, database=config.PVGIS_DATABASE)
-
     print("Generant/carregant perfil de consum...")
+    custom_load = None
+    target_hours = None
     if config.CONSUMPTION["profile"] == "custom_csv" and config.CONSUMPTION["custom_csv_path"]:
-        load = load_custom_consumption(config.CONSUMPTION["custom_csv_path"])
+        custom_load = load_custom_consumption(config.CONSUMPTION["custom_csv_path"])
+        target_hours = len(custom_load)
+
+    print(f"Obtenint dades de produccio PV de PVGIS per '{config.LOCATION['name']}'...")
+    pv = get_hourly_pv_production(
+        config.LOCATION,
+        config.PV_SYSTEM,
+        database=config.PVGIS_DATABASE,
+        target_hours=target_hours,
+    )
+    if custom_load is not None:
+        load = custom_load
     else:
         load = default_hourly_consumption(config.CONSUMPTION["annual_kwh"], year=pv.index[0].year)
+    print(
+        f"Any PVGIS representatiu: {pv.attrs['pvgis_reference_year']} "
+        f"(mediana de {pv.attrs['pvgis_complete_years']} anys complets amb dades)"
+    )
+
+    _validate_hourly_profiles(pv, load)
 
     pv_vals = pv["pv_kwh"].reset_index(drop=True)
     base_load_vals = load["load_kwh"].reset_index(drop=True)
@@ -66,6 +83,7 @@ def run():
             thermal_runtime_config,
             config.BATTERY,
             config.ECONOMY,
+            config.LIFECYCLE,
         )
         print_electric_alternatives_summary(thermal_summary["electric_alternatives_with_pv"])
     if config.THERMAL.get("enabled", False):
@@ -81,7 +99,9 @@ def run():
         )
     thermal_heat_vals = thermal_profile["thermal_heat_demand_kwh"].reset_index(drop=True)
     thermal_electricity_vals = thermal_profile["thermal_electricity_kwh"].reset_index(drop=True)
-    n = min(len(pv_vals), len(base_load_vals), len(thermal_electricity_vals))
+    if len(thermal_electricity_vals) != len(pv_vals):
+        raise ValueError("El perfil tèrmic no coincideix amb el nombre d'hores de PVGIS")
+    n = len(pv_vals)
 
     df = pd.DataFrame({
         "pv_kwh": pv_vals.iloc[:n].values,
@@ -109,6 +129,8 @@ def run():
     monthly = monthly_summary(df)
     hourly_profile = hourly_profile_by_season(df)
     summary = compute_summary(df)
+    summary["pvgis_reference_year"] = pv.attrs.get("pvgis_reference_year", pv.index[0].year)
+    summary["pvgis_complete_years"] = pv.attrs.get("pvgis_complete_years", 1)
 
     battery_diag = None
     if config.BATTERY["enabled"]:
@@ -121,19 +143,24 @@ def run():
         config.ECONOMY,
         config.LIFECYCLE,
     )
-    environmental_summary = compute_lifecycle_environmental_summary(
-        summary,
-        config.PV_SYSTEM["peak_power_kwp"],
-        config.BATTERY,
-        config.LIFECYCLE,
-    )
     lifecycle_projection = compute_lifecycle_projection(
         summary,
         config.PV_SYSTEM["peak_power_kwp"],
         config.BATTERY,
         config.ECONOMY,
         config.LIFECYCLE,
+        df,
     )
+    environmental_summary = compute_lifecycle_environmental_summary(
+        summary,
+        config.PV_SYSTEM["peak_power_kwp"],
+        config.BATTERY,
+        config.LIFECYCLE,
+        df,
+        lifecycle_projection,
+    )
+    economic_summary["npv"] = lifecycle_projection.get("npv", economic_summary["npv"])
+    economic_summary["npv_25y"] = economic_summary["npv"]
     combined_economic_summary = compute_combined_economic_summary(
         thermal_summary, economic_summary, config.ECONOMY
     )
@@ -165,6 +192,35 @@ def run():
             webbrowser.open("file://" + os.path.abspath(path))
 
     return df
+
+
+def _validate_hourly_profiles(pv, load):
+    """Comprova que producció i consum cobreixen el mateix any hora a hora."""
+    for label, frame, column in (("PVGIS", pv, "pv_kwh"), ("consum", load, "load_kwh")):
+        if column not in frame.columns:
+            raise ValueError(f"La sèrie de {label} no conté la columna '{column}'")
+        if not isinstance(frame.index, pd.DatetimeIndex) or frame.index.hasnans:
+            raise ValueError(f"La sèrie de {label} no té un índex de dates vàlid")
+        if frame.index.tz is not None:
+            raise ValueError(f"La sèrie de {label} ha d'utilitzar hores locals sense zona horària")
+        if not len(frame.index) or not frame.index.is_monotonic_increasing or frame.index.has_duplicates:
+            raise ValueError(f"La sèrie de {label} és buida, desordenada o té hores duplicades")
+        expected = pd.date_range(
+            f"{frame.index[0].year}-01-01 00:00",
+            f"{frame.index[0].year}-12-31 23:00",
+            freq="h",
+        )
+        if not frame.index.equals(expected):
+            raise ValueError(f"La sèrie de {label} no cobreix un any complet d'hores sense salts")
+        values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+        if not np.isfinite(values).all() or (values < 0).any():
+            raise ValueError(f"La sèrie de {label} conté valors negatius, buits o no finits")
+
+    if len(pv) != len(load):
+        raise ValueError(
+            f"Les sèries no cobreixen el mateix nombre d'hores: PVGIS={len(pv)}, consum={len(load)}. "
+            "Cal proporcionar un any complet amb el mateix nombre d'hores (inclòs el tractament dels anys de traspàs)."
+        )
 
 
 def archive_report(report_path, archive_dir, location_name):
@@ -239,7 +295,7 @@ def print_economic_summary(economic_summary):
         print(" Temps de recuperacio:           no viable econòmicament")
     else:
         print(f" Temps de recuperacio:           {economic_summary['payback_years']:10.1f} anys")
-    print(f" VAN estimat (25 anys):          {economic_summary['npv_25y']:10.0f} €")
+    print(f" VAN estimat ({economic_summary['project_life_years']} anys):      {economic_summary['npv']:10.0f} €")
     print(f" Preu compra electricitat:      {economic_summary['buy_price']:10.2f} €/kWh")
     print(f" Preu venda excedents:          {economic_summary['sell_price']:10.2f} €/kWh")
     print(f" Pèrdua anual de producció:     {economic_summary['panel_degradation_pct_per_year'] * 100:5.2f} %/any")
@@ -252,8 +308,9 @@ def print_environmental_summary(environmental_summary):
     print("=" * 52)
     print(f" Emissions incorporades:        {environmental_summary['embodied_co2_kg']:10.0f} kg CO2e")
     print(f" CO2 evitat / any:             {environmental_summary['avoided_co2_per_year_kg']:10.0f} kg CO2e")
-    print(f" CO2 evitat en 25 anys:        {environmental_summary['co2_saved_kg_over_life']:10.0f} kg CO2e")
-    print(f" Balanç net 25 anys:           {environmental_summary['net_co2_kg']:10.0f} kg CO2e")
+    life_years = environmental_summary.get("panel_life_years", 25)
+    print(f" CO2 evitat en {life_years} anys:        {environmental_summary['co2_saved_kg_over_life']:10.0f} kg CO2e")
+    print(f" Balanç net {life_years} anys:           {environmental_summary['net_co2_kg']:10.0f} kg CO2e")
     print("=" * 52)
 
 
@@ -261,7 +318,7 @@ def print_battery_diag(diag):
     print("\n" + "-" * 52)
     print(" DIAGNOSTIC DE LA BATERIA")
     print("-" * 52)
-    print(f" Dies bateria saturada (100%):        {diag['n_saturated_days']} / {diag['n_days']}")
+    print(f" Dies bateria saturada ({diag['max_soc_pct']:.0f}%):       {diag['n_saturated_days']} / {diag['n_days']}")
     print(f" Dies bateria buida:                   {diag['n_empty_days']} / {diag['n_days']}")
     print(f" Dies limitats per potencia carrega:   {diag['n_power_charge_days']} / {diag['n_days']}")
     print(f" Dies limitats per potencia descarrega:{diag['n_power_discharge_days']} / {diag['n_days']}")

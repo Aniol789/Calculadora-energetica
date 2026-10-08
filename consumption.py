@@ -32,6 +32,9 @@ MONTHLY_FACTOR = {
 
 
 def default_hourly_consumption(annual_kwh, year=2023):
+    annual_kwh = float(annual_kwh)
+    if not np.isfinite(annual_kwh) or annual_kwh < 0:
+        raise ValueError("El consum anual ha de ser un valor finit no negatiu")
     idx = pd.date_range(f"{year}-01-01", f"{year}-12-31 23:00", freq="h")
     values = []
     for ts in idx:
@@ -49,6 +52,38 @@ def load_custom_consumption(csv_path):
     Espera un CSV amb dues columnes: data/hora i consum en kWh, amb 8760
     (o 8784 en any de traspas) files horaries.
     """
-    df = pd.read_csv(csv_path, parse_dates=[0], index_col=0)
-    df.columns = ["load_kwh"]
-    return df
+    try:
+        df = pd.read_csv(csv_path, parse_dates=[0], index_col=0)
+    except (OSError, ValueError, pd.errors.ParserError) as exc:
+        raise ValueError(f"No s'ha pogut llegir el CSV de consum '{csv_path}': {exc}") from exc
+
+    if len(df.columns) != 1:
+        raise ValueError("El CSV de consum ha de tenir exactament dues columnes: data/hora i kWh")
+    if not isinstance(df.index, pd.DatetimeIndex) or df.index.hasnans:
+        raise ValueError("La primera columna del CSV ha de contenir dates i hores vàlides")
+
+    try:
+        values = pd.to_numeric(df.iloc[:, 0], errors="raise").astype(float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("La columna de consum del CSV només pot contenir valors numèrics") from exc
+    if not np.isfinite(values.to_numpy()).all():
+        raise ValueError("El CSV de consum conté valors buits o no finits")
+    if (values < 0).any():
+        raise ValueError("El consum horari no pot ser negatiu")
+
+    if df.index.tz is not None:
+        raise ValueError("El CSV ha d'utilitzar hores locals sense zona horària ni canvis d'horari d'estiu")
+    if not df.index.is_monotonic_increasing or df.index.has_duplicates:
+        raise ValueError("Les dates del CSV han d'estar ordenades i no poden repetir-se")
+    expected_index = pd.date_range(
+        f"{df.index[0].year}-01-01 00:00",
+        f"{df.index[0].year}-12-31 23:00",
+        freq="h",
+    ) if len(df.index) else pd.DatetimeIndex([])
+    if not df.index.equals(expected_index):
+        raise ValueError(
+            "El CSV ha de contenir totes les hores d'un any complet, des de l'1 de gener a les 00:00, "
+            "en ordre i sense salts ni duplicats (8760 o 8784 files)"
+        )
+
+    return pd.DataFrame({"load_kwh": values.to_numpy()}, index=df.index)

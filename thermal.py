@@ -110,8 +110,12 @@ def estimate_thermal_site_factors(location_config=None):
     mean_ground_temp_c = float(ground.get("mean_ground_temp_c", mean_air_temp_c))
     thermal_conductivity = float(ground.get("thermal_conductivity_w_mk", 2.2))
     thermal_diffusivity = float(ground.get("thermal_diffusivity_m2_s", 1.0e-6))
+    if not np.isfinite([mean_air_temp_c, winter_design_temp_c, mean_ground_temp_c, thermal_conductivity, thermal_diffusivity]).all():
+        raise ValueError("Els paràmetres climàtics i del terreny han de ser valors finits")
+    if thermal_conductivity <= 0:
+        raise ValueError("La conductivitat tèrmica del terreny ha de ser positiva")
     if thermal_diffusivity <= 0:
-        thermal_diffusivity = 1.0e-6
+        raise ValueError("La difusivitat tèrmica del terreny ha de ser positiva")
 
     mildness_bonus = max(0.0, (mean_air_temp_c - 15.0) / 12.0)
     winter_penalty = max(0.0, (5.0 - winter_design_temp_c) / 9.0)
@@ -161,11 +165,24 @@ def estimate_geothermal_design(heat_demand_kwh, peak_power_kw=None, location_con
     mean_ground_temp_c = float(ground.get("mean_ground_temp_c", climate.get("mean_annual_air_temp_c", 15.0)))
     thermal_conductivity = float(ground.get("thermal_conductivity_w_mk", 2.2))
     thermal_diffusivity = float(ground.get("thermal_diffusivity_m2_s", 1.1e-6))
-    if thermal_diffusivity <= 0:
-        thermal_diffusivity = 1.1e-6
 
     demand_kwh = float(heat_demand_kwh)
     design_peak_kw = float(peak_power_kw) if peak_power_kw is not None else max(demand_kwh / 2000.0, 3.0)
+    analysis_years = float(settings.get("analysis_years", 20.0))
+    heat_pump_capex_per_kw = float(settings.get("capex_eur_per_kw", 1500.0))
+    design_values = [
+        indoor_setpoint_c, ground_loop_target_c, borehole_diameter_m, groundwater_level_m,
+        mean_ground_temp_c, thermal_conductivity, thermal_diffusivity, demand_kwh,
+        design_peak_kw, analysis_years, heat_pump_capex_per_kw,
+    ]
+    if not np.isfinite(design_values).all():
+        raise ValueError("Els paràmetres del dimensionament geotèrmic han de ser finits")
+    if demand_kwh < 0 or design_peak_kw <= 0:
+        raise ValueError("La demanda ha de ser no negativa i la potència de disseny positiva")
+    if thermal_conductivity <= 0 or thermal_diffusivity <= 0 or borehole_diameter_m <= 0:
+        raise ValueError("La conductivitat, difusivitat i diàmetre del pou han de ser positius")
+    if groundwater_level_m < 0 or analysis_years <= 0 or heat_pump_capex_per_kw < 0:
+        raise ValueError("El nivell freàtic i els costos han de ser vàlids i els anys d'anàlisi positius")
     delta_t_c = max(4.0, mean_ground_temp_c - ground_loop_target_c)
     # Estimació conservadora de flux tèrmic per metre de pou mostrant la relació
     # física entre conductivitat del terreny i capacitat de disipar calor.
@@ -180,10 +197,9 @@ def estimate_geothermal_design(heat_demand_kwh, peak_power_kw=None, location_con
     # Cost orientatiu per profunditat i terreny; s'ajusta amb la conductivitat i el nivell freàtic.
     drilling_cost_per_m = 58.0 + 18.0 / max(thermal_conductivity, 0.8) + max(0.0, (5.0 - groundwater_level_m)) * 3.0
     drilling_capex_eur = total_loop_length_m * drilling_cost_per_m * 1.18
-    heat_pump_capex_per_kw = float(settings.get("capex_eur_per_kw", 1500.0))
     heat_pump_capex_eur = design_peak_kw * heat_pump_capex_per_kw
     capex_eur = drilling_capex_eur + heat_pump_capex_eur
-    annualized_capex_eur = capex_eur / max(float(settings.get("analysis_years", 20.0)), 1.0)
+    annualized_capex_eur = capex_eur / analysis_years
 
     return {
         "source_key": "geotermia",
@@ -270,7 +286,9 @@ def hourly_thermal_electricity_profile(index, thermal_config):
     )
 
 
-def evaluate_electric_alternatives(pv_series, base_load_series, thermal_config, battery_config, economy_config):
+def evaluate_electric_alternatives(
+    pv_series, base_load_series, thermal_config, battery_config, economy_config, lifecycle_config=None
+):
     """Avalua fonts tèrmiques elèctriques aprofitant la FV i bateria existents."""
     results = []
     buy_price = float(economy_config.get("electricity_buy_price_eur_kwh", 0.0))
@@ -282,43 +300,65 @@ def evaluate_electric_alternatives(pv_series, base_load_series, thermal_config, 
             continue
         source_settings = {**thermal_config, "active_source": source_key}
         thermal_profile = hourly_thermal_electricity_profile(pv_series.index, source_settings)
-        load = base_load_series.reset_index(drop=True) + thermal_profile["thermal_electricity_kwh"].reset_index(drop=True)
-        pv = pv_series.reset_index(drop=True)
-        surplus = pv - load
-        if battery_config.get("enabled", False):
-            battery_result = simulate_battery_series(surplus, battery_config)
-            grid_import = battery_result["grid_import_kwh"]
-            grid_export = battery_result["grid_export_kwh"]
-        else:
-            grid_import = (-surplus).clip(lower=0)
-            grid_export = surplus.clip(lower=0)
-
         source_result = calculate_thermal_source(
             thermal_config.get("annual_heat_demand_kwh", 0.0),
             source_key,
             _source_runtime_config(source_key, thermal_config),
         )
-        grid_cost = float(grid_import.sum()) * buy_price
-        export_revenue = float(grid_export.sum()) * sell_price
         fixed_and_maintenance = source_result["annual_total_cost_eur"] - source_result["resource_cost_eur"] - source_result["auxiliary_energy_cost_eur"]
+        load = base_load_series.reset_index(drop=True) + thermal_profile["thermal_electricity_kwh"].reset_index(drop=True)
+        pv_base = pv_series.reset_index(drop=True)
+        degradation = float((lifecycle_config or {}).get("panel_degradation_pct_per_year", 0.0))
+        inflation = float(economy_config.get("annual_inflation_pct", 0.0))
+        project_life = int(economy_config.get("project_life_years", 1)) if lifecycle_config else 1
+        if not np.isfinite([degradation, inflation]).all() or not 0 <= degradation < 1 or inflation <= -1:
+            raise ValueError("La degradació i la inflació de l'anàlisi de cicles de vida no són vàlides")
+        yearly_system_costs = []
+        base_year_grid_import = 0.0
+        base_year_grid_export = 0.0
+        base_year_grid_cost = 0.0
+        base_year_export_revenue = 0.0
+        for year in range(1, project_life + 1):
+            pv = pv_base * ((1.0 - degradation) ** (year - 1))
+            surplus = pv - load
+            if battery_config.get("enabled", False):
+                battery_result = simulate_battery_series(surplus, battery_config)
+                grid_import = battery_result["grid_import_kwh"]
+                grid_export = battery_result["grid_export_kwh"]
+            else:
+                grid_import = (-surplus).clip(lower=0)
+                grid_export = surplus.clip(lower=0)
+            inflation_factor = (1.0 + inflation) ** (year - 1)
+            grid_cost = float(grid_import.sum()) * buy_price * inflation_factor
+            export_revenue = float(grid_export.sum()) * sell_price * inflation_factor
+            fixed_cost_year = fixed_and_maintenance * inflation_factor
+            yearly_system_costs.append(grid_cost - export_revenue + fixed_cost_year)
+            if year == 1:
+                base_year_grid_import = float(grid_import.sum())
+                base_year_grid_export = float(grid_export.sum())
+                base_year_grid_cost = grid_cost
+                base_year_export_revenue = export_revenue
+
+        # El primer element correspon a l'any base; els anys futurs ja inclouen inflació.
         results.append({
             **source_result,
             "pv_load_kwh": float(load.sum()),
-            "grid_import_kwh": float(grid_import.sum()),
-            "grid_export_kwh": float(grid_export.sum()),
-            "pv_self_consumed_kwh": float(pv.sum() - grid_export.sum()),
-            "grid_energy_cost_eur": grid_cost,
-            "pv_export_revenue_eur": export_revenue,
+            "grid_import_kwh": base_year_grid_import,
+            "grid_export_kwh": base_year_grid_export,
+            "pv_self_consumed_kwh": float(pv_base.sum() - base_year_grid_export),
+            "grid_energy_cost_eur": base_year_grid_cost,
+            "pv_export_revenue_eur": base_year_export_revenue,
             "reference_household_electricity_cost_eur": reference_household_electricity_cost,
             "thermal_fixed_and_maintenance_eur": fixed_and_maintenance,
-            "system_energy_cost_eur": grid_cost - export_revenue + fixed_and_maintenance,
+            "system_energy_cost_eur": base_year_grid_cost - base_year_export_revenue + fixed_and_maintenance,
+            "lifecycle_system_costs_eur": yearly_system_costs if lifecycle_config else None,
         })
     return results
 
 
 def _input_energy_kwh(heat_demand_kwh, source):
     performance = source.get("cop", source.get("efficiency"))
-    if performance is None or performance <= 0:
+    if performance is None or not np.isfinite(float(performance)) or performance <= 0:
         raise ValueError("La font ha de tenir un COP o un rendiment positiu")
     return heat_demand_kwh / performance
 
@@ -326,13 +366,29 @@ def _input_energy_kwh(heat_demand_kwh, source):
 def calculate_thermal_source(heat_demand_kwh, source_key, source_config=None):
     """Calcula els indicadors anuals d'una font per una demanda termica util."""
     demand = float(heat_demand_kwh)
-    if demand < 0:
-        raise ValueError("La demanda termica no pot ser negativa")
+    if not np.isfinite(demand) or demand < 0:
+        raise ValueError("La demanda tèrmica ha de ser un valor finit no negatiu")
 
     if source_key not in THERMAL_SOURCES and not source_config:
         raise KeyError(f"Font termica desconeguda: {source_key}")
     source = deepcopy(THERMAL_SOURCES.get(source_key, {}))
     source.update(source_config or {})
+
+    for name, value in source.items():
+        if isinstance(value, (int, float, np.number)) and not np.isfinite(value):
+            raise ValueError(f"El paràmetre '{name}' de {source_key} ha de ser finit")
+    for name in (
+        "primary_energy_factor", "auxiliary_primary_energy_factor",
+        "direct_emission_factor_kg_co2_per_kwh", "auxiliary_emission_factor_kg_co2_per_kwh",
+        "resource_price_eur_per_kwh", "electricity_price_eur_per_kwh",
+        "auxiliary_electricity_kwh_per_heat_kwh", "fixed_annual_cost_eur",
+        "maintenance_annual_eur", "capex_eur_per_kw", "peak_power_kw",
+    ):
+        if name in source and float(source[name]) < 0:
+            raise ValueError(f"El paràmetre '{name}' de {source_key} no pot ser negatiu")
+    for name in ("nonrenewable_primary_share", "auxiliary_nonrenewable_share"):
+        if name in source and not 0 <= float(source[name]) <= 1:
+            raise ValueError(f"El paràmetre '{name}' de {source_key} ha d'estar entre 0 i 1")
 
     site_factors = estimate_thermal_site_factors(
         source.get("location_config") or source.get("location") or source.get("site")
@@ -341,7 +397,7 @@ def calculate_thermal_source(heat_demand_kwh, source_key, source_config=None):
     if source_key == "geotermia":
         geothermal_design = estimate_geothermal_design(
             demand,
-            source.get("peak_power_kw", 0.0),
+            source.get("peak_power_kw"),
             source.get("location_config") or source.get("location") or source.get("site"),
             source,
         )
@@ -415,6 +471,11 @@ def compare_thermal_sources(heat_demand_kwh, thermal_config=None):
     """Compara fonts i genera rànquings de cost, emissions i energia primària."""
     settings = thermal_config or {}
     source_keys = settings.get("sources", list(THERMAL_SOURCES))
+    if not source_keys or len(set(source_keys)) != len(source_keys):
+        raise ValueError("La llista de fonts tèrmiques ha de ser no buida i sense duplicats")
+    unknown_sources = set(source_keys) - set(THERMAL_SOURCES)
+    if unknown_sources:
+        raise ValueError(f"Fonts tèrmiques desconegudes: {', '.join(sorted(unknown_sources))}")
     source_overrides = settings.get("source_overrides", {})
     location_config = settings.get("location_config") or settings.get("location") or settings.get("site")
     common_settings = {
@@ -429,7 +490,14 @@ def compare_thermal_sources(heat_demand_kwh, thermal_config=None):
         calculate_thermal_source(heat_demand_kwh, key, effective_overrides[key])
         for key in source_keys
     ]
-    weights = settings.get("weights", {"cost": 0.34, "environment": 0.33, "energy": 0.33})
+    raw_weights = settings.get("weights", {"cost": 0.34, "environment": 0.33, "energy": 0.33})
+    weights = {name: float(raw_weights.get(name, 0.0)) for name in ("cost", "environment", "energy")}
+    if not np.isfinite(list(weights.values())).all() or any(value < 0 for value in weights.values()):
+        raise ValueError("Els pesos de cost, medi ambient i energia han de ser finits i no negatius")
+    weight_total = sum(weights.values())
+    if weight_total <= 0:
+        raise ValueError("La suma dels pesos de la recomanació ha de ser superior a zero")
+    weights = {name: value / weight_total for name, value in weights.items()}
     reference_key = settings.get("payback_reference", source_keys[0] if source_keys else None)
     reference = next((item for item in results if item["source_key"] == reference_key), None)
     if reference:
