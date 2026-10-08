@@ -1,0 +1,105 @@
+{
+  "LOCATION": {
+    "name": "Santa Maria d'Oló",
+    "lat": 41.8745,
+    "lon": 2.0347,
+    "altitude_m": 542,
+    "climate": {
+      "mean_annual_air_temp_c": 15.3,
+      "winter_design_temp_c": 3.0,
+      "summer_design_temp_c": 29.0,
+      "heating_degree_days_base_18": 1300,
+      "cooling_degree_days_base_26": 120
+    },
+    "ground": {
+      "mean_ground_temp_c": 14.5,
+      "thermal_conductivity_w_mk": 2.2,
+      "thermal_diffusivity_m2_s": 1.1e-06,
+      "groundwater_level_m": 5.0,
+      "borehole_spacing_m": 6.0,
+      "rock_type": "granit"
+    }
+  },
+  "PV_SYSTEM": {
+    "peak_power_kwp": 5.0,
+    "tilt_deg": 30,
+    "azimuth_deg": 0,
+    "system_loss_pct": 14,
+    "technology": "crystSi",
+    "mounting": "building",
+    "use_horizon": true
+  },
+  "PVGIS_DATABASE": "PVGIS-SARAH3",
+  "CONSUMPTION": {
+    "annual_kwh": 6000,
+    "profile": "residential_default",
+    "custom_csv_path": null
+  },
+  "THERMAL": {
+    "enabled": true,
+    "annual_heat_demand_kwh": 10000.0,
+    "active_source": "aerotermia",
+    "peak_power_kw": 8.0,
+    "analysis_years": 20,
+    "heating_setpoint_c": 22.0,
+    "ground_loop_target_temp_c": 8.0,
+    "borehole_diameter_m": 0.12,
+    "groundwater_level_m": 5.0,
+    "payback_reference": "gas_natural",
+    "sources": [
+      "gas_natural",
+      "gasoil",
+      "aerotermia",
+      "geotermia",
+      "biomassa",
+      "electricitat_resistencia"
+    ],
+    "weights": {
+      "cost": 0.34,
+      "environment": 0.33,
+      "energy": 0.33
+    },
+    "source_overrides": {}
+  },
+  "BATTERY": {
+    "enabled": true,
+    "capacity_kwh": 3.0,
+    "max_charge_kw": 3.0,
+    "max_discharge_kw": 3.0,
+    "round_trip_efficiency": 0.9,
+    "min_soc_pct": 10,
+    "max_soc_pct": 100,
+    "initial_soc_pct": 50
+  },
+  "ECONOMY": {
+    "pv_cost_per_kw": 850.0,
+    "battery_cost_per_kwh": 280.0,
+    "battery_cost_per_kw": 120.0,
+    "installation_extra_pct": 0.12,
+    "annual_om_pct": 0.015,
+    "electricity_buy_price_eur_kwh": 0.22,
+    "electricity_sell_price_eur_kwh": 0.09,
+    "annual_inflation_pct": 0.02,
+    "discount_rate_pct": 0.04,
+    "project_life_years": 25
+  },
+  "LIFECYCLE": {
+    "panel_degradation_pct_per_year": 0.004,
+    "panel_life_years": 25,
+    "battery_life_years": 10,
+    "inverter_life_years": 12,
+    "inverter_cost_per_kw": 180.0,
+    "pv_embodied_co2_kg_per_kwp": 340.0,
+    "battery_embodied_co2_kg_per_kwh": 80.0,
+    "inverter_embodied_co2_kg_per_kw": 40.0,
+    "grid_emission_factor_kg_co2_per_kwh": 0.18
+  },
+  "OUTPUT": {
+    "save_hourly_csv": true,
+    "hourly_csv_path": "resultats_horaris.csv",
+    "make_plots": true,
+    "make_report": true,
+    "report_archive_dir": "informes_historic",
+    "open_report_in_browser": true
+  }
+}
