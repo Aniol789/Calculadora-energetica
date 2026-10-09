@@ -7,6 +7,8 @@ qualsevol navegador (no cal servidor).
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
+from datetime import datetime
+from html import escape
 
 CARD_CSS = """
 <style>
@@ -18,7 +20,68 @@ CARD_CSS = """
   body {
     background: var(--bg); color: var(--text);
     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    margin: 0; padding: 32px 5vw;
+    margin: 0; padding: 0;
+  }
+  .report-container { width: min(1240px, 100%); margin: 0 auto; padding: 24px clamp(20px, 5vw, 72px) 72px; }
+  .front-page {
+    min-height: 100vh; position: relative; overflow: hidden; display: flex; flex-direction: column;
+    justify-content: space-between; padding: clamp(36px, 8vw, 100px) clamp(28px, 10vw, 140px);
+    background: radial-gradient(ellipse at 88% 18%, rgba(56,189,248,.24), transparent 35%),
+                radial-gradient(ellipse at 12% 92%, rgba(52,211,153,.16), transparent 36%), #0b1221;
+    border-bottom: 1px solid rgba(148,163,184,.24); break-after: page; page-break-after: always;
+  }
+  .front-page::after { content: ""; position: absolute; width: 52vw; height: 52vw; min-width: 420px; min-height: 420px; right: -14vw; bottom: -28vw; border: 1px solid rgba(56,189,248,.19); border-radius: 50%; box-shadow: 0 0 0 44px rgba(56,189,248,.025), 0 0 0 90px rgba(56,189,248,.025), 0 0 0 138px rgba(52,211,153,.025); pointer-events: none; }
+  .cover-brand { display: flex; align-items: center; gap: 13px; position: relative; z-index: 1; }
+  .cover-mark { width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center; color: #07111f; font-size: 23px; font-weight: 900; background: linear-gradient(135deg,#7dd3fc,#6ee7b7); box-shadow: 0 8px 28px rgba(56,189,248,.22); }
+  .cover-brand-name { font-size: .95rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+  .cover-brand-sub { color: var(--muted); font-size: .75rem; margin-top: 3px; }
+  .cover-main { position: relative; z-index: 1; max-width: 820px; padding: 64px 0; }
+  .cover-eyebrow, .section-kicker { color: var(--accent2); text-transform: uppercase; letter-spacing: .15em; font-size: .74rem; font-weight: 800; }
+  .cover-main h1 { font-size: clamp(3.2rem, 9vw, 7rem); line-height: .98; margin: 18px 0; letter-spacing: -.065em; max-width: 780px; }
+  .cover-description { color: #b7c7d9; font-size: clamp(1.05rem, 2vw, 1.35rem); line-height: 1.6; max-width: 630px; }
+  .cover-case { margin-top: 48px; border-left: 3px solid var(--accent2); padding: 4px 0 4px 18px; }
+  .cover-case-label { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; }
+  .cover-case-name { font-size: clamp(1.35rem, 3vw, 2rem); margin-top: 7px; font-weight: 700; }
+  .cover-meta { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 18px; max-width: 850px; position: relative; z-index: 1; }
+  .cover-meta-item { border-top: 1px solid rgba(148,163,184,.35); padding-top: 12px; }
+  .cover-meta-label { color: var(--muted); font-size: .7rem; text-transform: uppercase; letter-spacing: .09em; }
+  .cover-meta-value { font-weight: 650; margin-top: 5px; }
+  .index-page { min-height: 100vh; padding: clamp(38px, 7vw, 82px) clamp(24px, 10vw, 140px); max-width: 1240px; margin: 0 auto; break-after: page; page-break-after: always; }
+  .index-page h1 { font-size: clamp(2rem,5vw,3.3rem); margin: 10px 0 10px; letter-spacing: -.04em; }
+  .index-lead { color: var(--muted); max-width: 660px; line-height: 1.65; margin: 0 0 30px; }
+  .toc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .toc-link { display: grid; grid-template-columns: 54px 1fr 24px; gap: 15px; align-items: center; text-decoration: none; color: var(--text); padding: 16px 18px; border: 1px solid rgba(148,163,184,.19); border-radius: 13px; background: rgba(30,41,59,.62); transition: transform .18s ease, border-color .18s ease, background .18s ease; }
+  .toc-link:hover { transform: translateX(4px); border-color: rgba(56,189,248,.5); background: rgba(30,41,59,.95); }
+  .toc-number { color: var(--accent2); font-size: .82rem; font-weight: 800; letter-spacing: .05em; }
+  .toc-title { font-weight: 700; }
+  .toc-description { margin-top: 4px; color: var(--muted); font-size: .86rem; line-height: 1.4; }
+  .toc-arrow { color: var(--accent); font-size: 1.2rem; text-align: right; }
+  .report-toolbar { position: sticky; top: 0; z-index: 10; display: flex; justify-content: space-between; align-items: center; padding: 10px max(20px, calc((100vw - 1096px)/2)); background: rgba(11,18,33,.9); border-bottom: 1px solid rgba(148,163,184,.18); backdrop-filter: blur(14px); }
+  .toolbar-brand { color: var(--text); font-weight: 750; text-decoration: none; }
+  .toolbar-actions { display: flex; gap: 10px; align-items: center; }
+  .toolbar-link, .print-button { color: #cbd5e1; background: transparent; text-decoration: none; border: 1px solid #475569; padding: 8px 12px; border-radius: 9px; font: inherit; font-size: .85rem; cursor: pointer; }
+  .print-button { background: rgba(56,189,248,.13); border-color: rgba(56,189,248,.45); color: #bae6fd; }
+  .report-section { padding: 38px 0 24px; border-bottom: 1px solid rgba(148,163,184,.18); scroll-margin-top: 66px; break-before: page; page-break-before: always; }
+  .section-intro { margin: 0 0 20px; max-width: 850px; }
+  .section-intro h2 { font-size: clamp(1.8rem,4vw,2.7rem); color: var(--text); letter-spacing: -.04em; margin: 8px 0; }
+  .section-intro p { color: var(--muted); line-height: 1.6; margin: 0; }
+  .report-section > h2:first-child { border-bottom: 1px solid rgba(148,163,184,.2); padding-bottom: 12px; }
+  .method-card { background: linear-gradient(135deg,rgba(56,189,248,.1),rgba(52,211,153,.06)); border: 1px solid rgba(56,189,248,.25); border-radius: 14px; padding: 20px; margin: 18px 0; line-height: 1.65; }
+  .method-card h3 { margin-top: 0; color: var(--accent); }
+  .source-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(230px,1fr)); gap: 10px; margin-top: 14px; }
+  .source-list a { color: #bae6fd; text-decoration-color: rgba(125,211,252,.45); text-underline-offset: 3px; }
+  .report-footer { color: var(--muted); font-size: .78rem; border-top: 1px solid rgba(148,163,184,.2); margin-top: 36px; padding-top: 14px; }
+  @media (max-width: 640px) { .cover-meta { grid-template-columns: 1fr; gap: 12px; } .cover-main { padding: 40px 0; } .toc-link { grid-template-columns: 38px 1fr 18px; gap: 10px; padding: 13px; } .report-toolbar { padding: 9px 14px; } .toolbar-link { display: none; } }
+  @media print {
+    @page { size: A4; margin: 15mm 14mm; }
+    body { background: #fff !important; color: #182230 !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    .front-page { min-height: 267mm; margin: -15mm -14mm 0; padding: 25mm 22mm; }
+    .index-page { min-height: 267mm; padding: 20mm 8mm; }
+    .report-toolbar { display: none; }
+    .report-container { width: 100%; padding: 0; }
+    .report-section { padding-top: 12mm; }
+    .chart-block, .summary-section, .kpi-card, .exec-card, .savings-card { break-inside: avoid; }
+    a { color: inherit; }
   }
   .top-header {
     padding: 12px 0 18px; border-bottom: 1px solid rgba(148, 163, 184, 0.25); margin-bottom: 18px;
@@ -167,6 +230,81 @@ def _quality_band(value, low, high):
     if value >= low:
         return "Acceptable", "quality-medium"
     return "Millorable", "quality-low"
+
+
+def _chapter_intro(number, category, title, description):
+    return f"""
+    <header class="section-intro">
+      <div class="section-kicker">{number} · {escape(category)}</div>
+      <h2>{escape(title)}</h2>
+      <p>{escape(description)}</p>
+    </header>
+    """
+
+
+def _report_identity(config, summary, thermal_summary):
+    location = getattr(config, "LOCATION", {}) if config is not None else {}
+    thermal = getattr(config, "THERMAL", {}) if config is not None else {}
+    if not isinstance(thermal, dict):
+        thermal = {}
+    location_name = location.get("name", "Cas energètic") if isinstance(location, dict) else "Cas energètic"
+    source_names = {
+        "gas_natural": "Gas natural", "gasoil": "Gasoil", "aerotermia": "Aerotèrmia",
+        "geotermia": "Geotèrmia", "biomassa": "Biomassa (pèl·let)",
+        "electricitat_resistencia": "Resistència elèctrica",
+    }
+    active_source = thermal.get("active_source") if isinstance(thermal, dict) else None
+    system_name = source_names.get(active_source, "Sistema fotovoltaic")
+    case_name = f"{location_name} · {system_name}" if thermal.get("enabled", False) else location_name
+    year = summary.get("pvgis_reference_year", "No indicat")
+    complete_years = summary.get("pvgis_complete_years", 1)
+    return {
+        "case_name": escape(str(case_name)),
+        "location": escape(str(location_name)),
+        "system": escape(str(system_name)),
+        "year": escape(str(year)),
+        "complete_years": escape(str(complete_years)),
+        "date": datetime.now().astimezone().strftime("%d/%m/%Y"),
+    }
+
+
+def _methodology_section(config, identity):
+    pvgis_database = getattr(config, "PVGIS_DATABASE", "PVGIS") if config is not None else "PVGIS"
+    consumption = getattr(config, "CONSUMPTION", {}) if config is not None else {}
+    thermal = getattr(config, "THERMAL", {}) if config is not None else {}
+    if not isinstance(thermal, dict):
+        thermal = {}
+    economy = getattr(config, "ECONOMY", {}) if config is not None else {}
+    load_profile = consumption.get("profile", "no indicat") if isinstance(consumption, dict) else "no indicat"
+    demand_mode = thermal.get("heat_demand_mode", "annual_kwh") if isinstance(thermal, dict) else "annual_kwh"
+    demand_description = (
+        "La demanda s'estima hora a hora amb el coeficient de pèrdua de l'edifici i la diferència entre consigna i temperatura exterior."
+        if demand_mode == "heat_loss_coefficient"
+        else "La calor anual configurada es conserva; les temperatures en determinen la distribució horària i afecten el COP estimat."
+    )
+    annual_index = float(economy.get("annual_inflation_pct", 0.0)) * 100 if isinstance(economy, dict) else 0.0
+    return f"""
+    <div class="method-card">
+      <h3>Com llegir aquests resultats</h3>
+      <p><strong>Clima i producció:</strong> s'ha utilitzat {escape(str(pvgis_database))} i l'any representatiu {identity['year']}, escollit entre {identity['complete_years']} anys complets disponibles per la producció FV i els graus-hora de calefacció. És una comparació amb un any representatiu, no una estimació de l'extrem meteorològic ni del risc interanual.</p>
+      <p><strong>Perfil de consum:</strong> {escape(str(load_profile))}. Si és un perfil sintètic, els consums horaris són una aproximació escalada al total anual configurat.</p>
+      <p><strong>Demanda tèrmica:</strong> {escape(demand_description)}</p>
+      <p><strong>Bomba de calor:</strong> el COP horari s'estima a partir d'un punt de referència i d'una corba termodinàmica simplificada. No és un SCOP certificat; la fitxa de rendiment del fabricant és necessària per una previsió d'equip específic.</p>
+      <p><strong>Costos i projecció:</strong> els preus de combustible, electricitat, manteniment i equipament són valors de referència editables. El model aplica una indexació general del {annual_index:.2f}% anual; no és una predicció de mercat diferenciada per recurs.</p>
+      <p><strong>Emissions:</strong> les emissions operatives depenen dels factors configurats i de l'energia consumida. L'anàlisi de cicle de vida de la instal·lació fotovoltaica presenta separadament les emissions incorporades estimades.</p>
+    </div>
+    <div class="method-card">
+      <h3>Fonts de referència</h3>
+      <div class="source-list">
+        <a href="https://joint-research-centre.ec.europa.eu/photovoltaic-geographical-information-system-pvgis/using-pvgis-5/api-non-interactive-service_en">PVGIS · Comissió Europea / JRC</a>
+        <a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_pc_204/default/table">Eurostat · preus d'electricitat</a>
+        <a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_pc_202/default/table">Eurostat · preus de gas</a>
+        <a href="https://www.miteco.gob.es/es/cambio-climatico/temas/registro-huella/huella-de-carbonoinscripcion.html">MITECO · factors d'emissió</a>
+        <a href="https://avebiom.org/actividades/indice-de-precios-biocombustibles-solidos/">AVEBIOM · índex de preus del pèl·let</a>
+        <a href="https://www.iea-pvps.org/wp-content/uploads/2024/12/IEA-PVPS-2023-National-Survey-Report-Spain.pdf">IEA-PVPS · mercat FV a Espanya</a>
+      </div>
+    </div>
+    """
 
 
 def _executive_summary(summary, economic_summary):
@@ -329,7 +467,7 @@ def _thermal_section(thermal_summary):
         </div>"""
     
     return f"""
-    <h2>Fonts de calor i fred</h2>
+    <h3>Fonts de calor i fred</h3>
     <div class="metric-note">
       Demanda termica anual: <strong>{thermal_summary['heat_demand_kwh']:.0f} kWh</strong> |
       Recomanacio ponderada: <strong>{recommendation_text}</strong>
@@ -375,7 +513,7 @@ def _geothermal_design_section(thermal_summary):
         return ""
 
     return f"""
-    <h2>Dimensionament geotèrmic</h2>
+    <h3>Dimensionament geotèrmic</h3>
     <div class="metric-note">
       <strong>Cas actual:</strong> {geothermal_design.get('case_name', 'Ubicació no definida')}<br>
       <strong>Font de dades geològiques:</strong> conductivitat, difusivitat, temperatura del sòl i nivell freàtic es poden obtenir del ICGC o d'un estudi geotècnic local. Els valors es poden modificar directament a <strong>config.py</strong>.<br>
@@ -461,7 +599,7 @@ def _thermal_savings_section(thermal_summary):
         recommendation_msg = f"<strong>ℹ Info:</strong> La font actual ja és una bona solució. No hi ha millores significatives disponibles."
     
     return f"""
-    <h2>Análisis d'estalvi: Canvi de tecnologia de calefacció</h2>
+    <h3>Anàlisi d'estalvi: canvi de tecnologia de calefacció</h3>
     <div class="savings-section">
         <div>
             <h3>Comparativa: sistema actiu {current['source_name']} → alternativa amb millor puntuació global {best['source_name']}</h3>
@@ -642,7 +780,6 @@ def _system_summary_section(config):
         azimuth_desc = " (Nord)"
     
     return f"""
-    <h2>Resum del Sistema</h2>
     <div class="system-summary">
         <div class="summary-section">
             <h3>🏠 Ubicació i Client</h3>
@@ -779,7 +916,7 @@ def _personalized_analysis(thermal_summary, summary, economic_summary, config):
     should_change = annual_cost_diff > 0 or emissions_diff > 100  # estalvi > 100€/any o > 100 kg CO2
     
     analysis_text = f"""
-    <h2>Análisis Personalitzat i Recomanacions</h2>
+    <h3>Anàlisi personalitzada i recomanacions</h3>
     <div class="metric-note">
         <p>
             <strong>Sistema actual:</strong> Actualment, la instal·lació utilitza <strong>{active_name}</strong> com a font de calefacció per cobrir una demanda anual de {thermal_summary.get('heat_demand_kwh', 0):.0f} kWh. 
@@ -985,7 +1122,7 @@ def _thermal_comparison_charts(thermal_summary):
     ])
     
     return f"""
-    <h2>Comparativa de Fonts de Calefacció: Alternatives vs Sistema Actual</h2>
+    <h3>Comparativa de fonts de calefacció: alternatives vs sistema actual</h3>
     <div class="metric-note">
         Els gràfics següents mostren una comparativa detallada entre totes les fonts tèrmiques disponibles.
         La font actual s'identifica amb un ressalt visual. Els valors es mostren en termes ambientals (emissions, energia primaria),
@@ -1080,7 +1217,7 @@ def _combined_economic_section(combined_summary):
                 """)
 
         return f"""
-        <h2>Anàlisi econòmica combinada: FV + bateria + calefacció elèctrica</h2>
+        <h3>Anàlisi econòmica combinada: FV + bateria + calefacció elèctrica</h3>
         <div class="metric-note">
             Aquesta anàlisi compara dos escenaris per al mateix habitatge: referència amb
             <strong>{combined_summary['reference_name']}</strong> i tota l'electricitat domèstica comprada a la xarxa,
@@ -1355,7 +1492,7 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
     )
 
     battery_figs_html = ""
-    if "battery_soc_pct" in df.columns:
+    if battery_diag is not None and "battery_soc_pct" in df.columns:
         fig_soc = go.Figure()
         fig_soc.add_scatter(x=list(range(len(df))), y=df["battery_soc_pct"], mode="lines",
                              name="SOC %", line=dict(color="#34d399", width=1))
@@ -1386,7 +1523,7 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
     battery_html = ""
     if battery_diag is not None:
         battery_html = f"""
-        <h2>Dimensionament de la bateria</h2>
+        <h3>Dimensionament de la bateria</h3>
         <div class="kpi-grid">
           {_kpi(f"Dies bateria saturada ({battery_diag.get('max_soc_pct', 100):.0f}%)", battery_diag['n_saturated_days'], "warn")}
           {_kpi("Dies bateria buida", battery_diag['n_empty_days'], "danger")}
@@ -1404,7 +1541,7 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
     panel_life_years = lifecycle_impact.get("panel_life_years", 25)
     payback_text = "No viable econòmicament" if economic_summary["payback_years"] is None else f"{economic_summary['payback_years']:.1f} anys"
     economic_html = f"""
-    <h2>Analisi econòmica</h2>
+    <h3>Anàlisi econòmica de la instal·lació</h3>
     <div class="kpi-grid">
       {_kpi("Cost total instal·lacio", f"{economic_summary['capex_total']:.0f} €")}
       {_kpi("Cost plaques FV", f"{economic_summary['pv_capex']:.0f} €")}
@@ -1427,7 +1564,7 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
     )
 
     lifecycle_html = f"""
-    <h2>Vida útil i degradació del sistema</h2>
+    <h3>Vida útil i degradació del sistema</h3>
     <div class="kpi-grid">
       {_kpi("Pèrdua anual de rendiment", f"{economic_summary.get('panel_degradation_pct_per_year', 0) * 100:.2f} %/any")}
       {_kpi("Vida útil plaques", f"{economic_summary.get('lifecycle_impact', {}).get('panel_life_years', 25)} anys")}
@@ -1471,7 +1608,7 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
     combined_economic_html = _combined_economic_section(combined_economic_summary)
 
     first_year_kpis = f"""
-    <h2>Indicadors del primer any</h2>
+    <h3>Indicadors del primer any</h3>
     <div class="kpi-grid">
       {_kpi("Producció any 1", f"{summary['total_pv']:.0f} kWh")}
       {_kpi("Autoconsum any 1", f"{summary['self_consumed']:.0f} kWh", "accent2")}
@@ -1483,7 +1620,7 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
     """
 
     lifecycle_kpis = f"""
-    <h2>Indicadors del projecte ({project_life_years} anys)</h2>
+    <h3>Indicadors del projecte ({project_life_years} anys)</h3>
     <div class="kpi-grid">
       {_kpi("Producció total estimada", f"{sum(lifecycle_projection.get('annual_production_kwh', [])):.0f} kWh")}
       {_kpi(f"CO2 evitat en {environmental_summary.get('panel_life_years', panel_life_years)} anys", f"{environmental_summary.get('co2_saved_kg_over_life', 0):.0f} kg CO2e")}
@@ -1494,58 +1631,112 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
     </div>
     """
 
+    identity = _report_identity(config, summary, thermal_summary)
+    chapters = [
+        ("results", "Resultats", "Les xifres clau del primer any i la lectura inicial del projecte."),
+        ("system", "Sistema i autoconsum", "Configuració del cas, energia produïda, consum i encaix entre tots dos."),
+    ]
+    if thermal_summary:
+        chapters.append(("thermal", "Calefacció i alternatives", "Comparativa tècnica, econòmica i ambiental de les fonts tèrmiques."))
+    chapters.append(("economics", "Viabilitat i cicle de vida", "Inversió, estalvis, flux de caixa, degradació i emissions incorporades."))
+    if battery_diag is not None:
+        chapters.append(("battery", "Dimensionament de la bateria", "Saturacions, buidatges, límits de potència i ús anual estimat."))
+    chapters.append(("methodology", "Metodologia i fonts", "Dades emprades, abast dels càlculs i referències per interpretar-los."))
+    chapter_numbers = {chapter_id: f"{index:02d}" for index, (chapter_id, _, _) in enumerate(chapters, start=1)}
+    toc_html = "\n".join(
+        f'<li><a class="toc-link" href="#{chapter_id}"><span class="toc-number">{chapter_numbers[chapter_id]}</span>'
+        f'<span><span class="toc-title">{escape(title)}</span><div class="toc-description">{escape(description)}</div></span>'
+        f'<span class="toc-arrow" aria-hidden="true">→</span></a></li>'
+        for chapter_id, title, description in chapters
+    )
+    methodology_html = _methodology_section(config, identity)
+
     html = f"""<!DOCTYPE html>
 <html lang="ca">
-<head><meta charset="utf-8"><title>Informe integral d'energia, climatització i sostenibilitat</title>{CARD_CSS}</head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Energia Clara · {identity['case_name']}</title>{CARD_CSS}</head>
 <body>
-  <div class="top-header">
-    <h1>Informe integral d'energia, climatització i sostenibilitat</h1>
-    <div class="subtitle">Generat amb l'any PVGIS {summary.get('pvgis_reference_year', 'no indicat')}, triat com a any representatiu de producció FV i graus-hora de calefacció entre {summary.get('pvgis_complete_years', 1)} anys complets disponibles, i amb el perfil de consum configurat.</div>
-  </div>
+  <section class="front-page" aria-label="Portada de l'informe">
+    <div class="cover-brand"><div class="cover-mark" aria-hidden="true">E</div><div><div class="cover-brand-name">Energia Clara</div><div class="cover-brand-sub">Simulador d'energia i sistemes tèrmics</div></div></div>
+    <div class="cover-main">
+      <div class="cover-eyebrow">Informe tècnic · anàlisi energètica</div>
+      <h1>Energia que<br>encaixa.</h1>
+      <p class="cover-description">Producció fotovoltaica, autoconsum i alternatives de climatització en una lectura clara del sistema i del seu horitzó econòmic i ambiental.</p>
+      <div class="cover-case"><div class="cover-case-label">Cas d'estudi</div><div class="cover-case-name">{identity['case_name']}</div></div>
+    </div>
+    <div class="cover-meta">
+      <div class="cover-meta-item"><div class="cover-meta-label">Elaborat per</div><div class="cover-meta-value">Aniol Calafell</div></div>
+      <div class="cover-meta-item"><div class="cover-meta-label">Any meteorològic PVGIS</div><div class="cover-meta-value">{identity['year']} · {identity['complete_years']} anys revisats</div></div>
+      <div class="cover-meta-item"><div class="cover-meta-label">Data de l'informe</div><div class="cover-meta-value">{identity['date']}</div></div>
+    </div>
+  </section>
 
-  {_system_summary_section(config)}
+  <section class="index-page" id="index" aria-labelledby="index-title">
+    <div class="section-kicker">Guia de lectura</div>
+    <h1 id="index-title">Índex de l'informe</h1>
+    <p class="index-lead">Els blocs segueixen l'ordre de decisió: primer els resultats, després el sistema que els genera, les alternatives i els supòsits que permeten interpretar-los.</p>
+    <ol class="toc-list">{toc_html}</ol>
+  </section>
 
-  {_executive_summary(summary, economic_summary)}
+  <nav class="report-toolbar" aria-label="Eines de l'informe">
+    <a class="toolbar-brand" href="#index">Energia Clara</a>
+    <div class="toolbar-actions"><a class="toolbar-link" href="#index">Ves a l'índex ↑</a><button class="print-button" onclick="window.print()">Imprimeix / desa en PDF</button></div>
+  </nav>
 
-  {thermal_comparison_html}
+  <main class="report-container">
+    <section class="report-section" id="results">
+      {_chapter_intro(chapter_numbers['results'], "Lectura ràpida", "Resultats executius", "Els indicadors principals de l'escenari analitzat.")}
+      {_executive_summary(summary, economic_summary)}
+      {first_year_kpis}
+    </section>
 
-    {combined_economic_html}
+    <section class="report-section" id="system">
+      {_chapter_intro(chapter_numbers['system'], "Configuració i energia", "El cas i el balanç energètic", "Dades de partida, producció i relació horària entre l'energia solar i la demanda.")}
+      {_system_summary_section(config)}
+      {kpis}
+      <h3>Autoconsum i autosuficiència</h3>
+      {_autoconsumption_narrative(summary)}
+      <h3>Producció i consum al llarg de l'any</h3>
+      <div class="chart-block">{pio.to_html(fig_monthly, include_plotlyjs='cdn', full_html=False)}</div>
+      <div class="chart-block">{pio.to_html(fig_rates, include_plotlyjs=False, full_html=False)}</div>
+      <div class="chart-block">{pio.to_html(fig_daily, include_plotlyjs=False, full_html=False)}</div>
+      <h3>Perfil horari per estació</h3>
+      <div class="chart-block">{pio.to_html(fig_profile, include_plotlyjs=False, full_html=False)}</div>
+    </section>
 
-  {personalized_analysis_html}
+    {f'''<section class="report-section" id="thermal">
+      {_chapter_intro(chapter_numbers['thermal'], "Alternatives", "Calefacció i sistemes tèrmics", "Comparació de costos, emissions i energia per cobrir la demanda tèrmica del cas.")}
+      {thermal_comparison_html}
+      {combined_economic_html}
+      {personalized_analysis_html}
+      {_thermal_section(thermal_summary)}
+      {geothermal_design_html}
+      {_thermal_savings_section(thermal_summary)}
+      {thermal_charts_html}
+    </section>''' if thermal_summary else ''}
 
-  {kpis}
+    <section class="report-section" id="economics">
+      {_chapter_intro(chapter_numbers['economics'], "Horitzó del projecte", "Viabilitat econòmica i cicle de vida", "Inversió inicial, estalvi, reposicions i trajectòria de l'impacte ambiental.")}
+      {economic_html}
+      {lifecycle_kpis}
+      {lifecycle_html}
+      <h3>Flux de caixa i evolució de la instal·lació</h3>
+      <div class="chart-block">{pio.to_html(fig_cashflow, include_plotlyjs=False, full_html=False)}</div>
+      <div class="chart-block">{pio.to_html(fig_production_lifecycle, include_plotlyjs=False, full_html=False)}</div>
+      <div class="chart-block">{pio.to_html(fig_emissions_lifecycle, include_plotlyjs=False, full_html=False)}</div>
+    </section>
 
-  {first_year_kpis}
-  {lifecycle_kpis}
+    {f'''<section class="report-section" id="battery">
+      {_chapter_intro(chapter_numbers['battery'], "Dimensionament", "Diagnòstic de la bateria", "Indicadors de saturació, buidatge i aprofitament del sistema d'emmagatzematge.")}
+      {battery_html}
+      {battery_figs_html}
+    </section>''' if battery_diag is not None else ''}
 
-  {_thermal_section(thermal_summary)}
-  {geothermal_design_html}
-  {_thermal_savings_section(thermal_summary)}
-  {thermal_charts_html}
-
-  <h2>Autoconsum i autosuficiencia</h2>
-  {_autoconsumption_narrative(summary)}
-
-  <h2>Produccio vs consum</h2>
-  <div class="chart-block">{pio.to_html(fig_monthly, include_plotlyjs='cdn', full_html=False)}</div>
-  <div class="chart-block">{pio.to_html(fig_rates, include_plotlyjs=False, full_html=False)}</div>
-  <div class="chart-block">{pio.to_html(fig_daily, include_plotlyjs=False, full_html=False)}</div>
-
-  <h2>Perfil horari</h2>
-  <div class="chart-block">{pio.to_html(fig_profile, include_plotlyjs=False, full_html=False)}</div>
-
-  <h2>Flux de caixa i trajectòria de la instal·lació</h2>
-  <div class="chart-block">{pio.to_html(fig_cashflow, include_plotlyjs=False, full_html=False)}</div>
-  <div class="chart-block">{pio.to_html(fig_production_lifecycle, include_plotlyjs=False, full_html=False)}</div>
-  <div class="chart-block">{pio.to_html(fig_emissions_lifecycle, include_plotlyjs=False, full_html=False)}</div>
-
-  {battery_figs_html}
-
-  {lifecycle_html}
-
-  {economic_html}
-
-  {battery_html}
+    <section class="report-section" id="methodology">
+      {_chapter_intro(chapter_numbers['methodology'], "Transparència", "Metodologia, abast i fonts", "Els supòsits i les dades que cal tenir presents abans d'interpretar o comparar els resultats.")}
+      {methodology_html}
+      <div class="report-footer">Energia Clara · Informe del cas {identity['case_name']} · Elaborat per Aniol Calafell · {identity['date']}</div>
+    </section>
+  </main>
 </body>
 </html>
 """
