@@ -189,10 +189,12 @@ dades identificables de clients. El `.gitignore` exclou les sortides
 generades i els casos locals; `cases/default_case.json` és el cas demostratiu
 versionat i també s'ha de revisar abans de publicar-lo.
 
-El repositori encara no declara una llicència. Fer-lo públic permet consultar
-el codi, però no concedeix automàticament permís general per reutilitzar-lo o
-redistribuir-lo. Tria i afegeix una llicència abans de convidar contribucions o
-reutilització.
+El codi d'aquest repositori es distribueix sota la llicència
+[Apache 2.0](LICENSE). Permet utilitzar, copiar, modificar i redistribuir el
+programari, inclòs comercialment, subjecte a les seves condicions, com ara
+incloure una còpia de la llicència i conservar els avisos de copyright. També
+inclou una concessió de patents. És una llicència permissiva: no impedeix que
+altres persones copiïn o reutilitzin el codi si compleixen aquests termes.
 
 ## Limitacions actuals / possibles ampliacions
 
