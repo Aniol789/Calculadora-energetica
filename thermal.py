@@ -450,12 +450,22 @@ def evaluate_electric_alternatives(
                 base_year_export_revenue = export_revenue
 
         # El primer element correspon a l'any base; els anys futurs ja inclouen inflació.
+        pv_production_kwh = float(pv_base.sum())
+        pv_self_consumed_kwh = max(pv_production_kwh - base_year_grid_export, 0.0)
+        load_served_locally_kwh = max(float(load.sum()) - base_year_grid_import, 0.0)
         results.append({
             **source_result,
             "pv_load_kwh": float(load.sum()),
             "grid_import_kwh": base_year_grid_import,
             "grid_export_kwh": base_year_grid_export,
-            "pv_self_consumed_kwh": float(pv_base.sum() - base_year_grid_export),
+            "pv_production_kwh": pv_production_kwh,
+            "pv_self_consumed_kwh": pv_self_consumed_kwh,
+            "self_consumption_rate_pct": (
+                pv_self_consumed_kwh / pv_production_kwh * 100.0 if pv_production_kwh else 0.0
+            ),
+            "self_sufficiency_rate_pct": (
+                load_served_locally_kwh / float(load.sum()) * 100.0 if float(load.sum()) else 0.0
+            ),
             "grid_energy_cost_eur": base_year_grid_cost,
             "pv_export_revenue_eur": base_year_export_revenue,
             "reference_household_electricity_cost_eur": reference_household_electricity_cost,
@@ -658,6 +668,8 @@ def compare_thermal_sources(heat_demand_kwh, thermal_config=None, outdoor_temp_s
             else:
                 payback = None
             result["payback_years"] = payback
+            result["payback_within_horizon"] = payback is not None and payback <= float(common_settings["analysis_years"])
+            result["payback_horizon_years"] = float(common_settings["analysis_years"])
             result["annual_operating_saving_vs_reference_eur"] = annual_saving
             result["additional_capex_vs_reference_eur"] = additional_capex
 

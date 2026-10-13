@@ -251,6 +251,7 @@ def compute_combined_economic_summary(thermal_summary, economic_summary, economi
         alternative_annual_cost = float(alternative.get("system_energy_cost_eur", 0.0)) + annual_pv_om
         annual_saving = reference_annual_cost - alternative_annual_cost
         payback = max(incremental_capex, 0.0) / annual_saving if annual_saving > 0 else None
+        payback_within_horizon = payback is not None and payback <= project_life
 
         cumulative_saving = 0.0
         npv = -incremental_capex
@@ -278,6 +279,7 @@ def compute_combined_economic_summary(thermal_summary, economic_summary, economi
             "incremental_capex": incremental_capex,
             "reference_annual_cost": reference_annual_cost,
             "package_annual_cost": alternative_annual_cost,
+            "annual_operating_cost_eur": alternative_annual_cost,
             "annual_saving": annual_saving,
             "cumulative_saving": cumulative_saving,
             "net_saving_over_life": cumulative_saving - incremental_capex - total_replacement_cost,
@@ -292,8 +294,12 @@ def compute_combined_economic_summary(thermal_summary, economic_summary, economi
             ),
             "npv": npv,
             "payback_years": payback,
+            "payback_within_horizon": payback_within_horizon,
+            "project_life_years": project_life,
             "grid_import_kwh": alternative.get("grid_import_kwh", 0.0),
             "grid_export_kwh": alternative.get("grid_export_kwh", 0.0),
+            "self_consumption_rate_pct": alternative.get("self_consumption_rate_pct", 0.0),
+            "self_sufficiency_rate_pct": alternative.get("self_sufficiency_rate_pct", 0.0),
             "input_energy_kwh": alternative.get("input_energy_kwh", 0.0),
             "emissions_kg_co2e": alternative.get("emissions_kg_co2e", 0.0),
             "primary_energy_nonrenewable_kwh": alternative.get("primary_energy_nonrenewable_kwh", 0.0),

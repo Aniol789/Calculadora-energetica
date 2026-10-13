@@ -10,6 +10,37 @@ import plotly.io as pio
 from datetime import datetime
 from html import escape
 
+GLOSSARY_TABS_SCRIPT = """
+<script>
+document.querySelectorAll('.glossary-tabs').forEach((tabList) => {
+    const tabs = Array.from(tabList.querySelectorAll('[role="tab"]'));
+    const activate = (selectedTab) => {
+        tabs.forEach((tab) => {
+            const selected = tab === selectedTab;
+            tab.setAttribute('aria-selected', String(selected));
+            tab.tabIndex = selected ? 0 : -1;
+            document.getElementById(tab.getAttribute('aria-controls')).hidden = !selected;
+        });
+    };
+
+    tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => activate(tab));
+        tab.addEventListener('keydown', (event) => {
+            let nextIndex = index;
+            if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+            else if (event.key === 'ArrowLeft') nextIndex = (index + tabs.length - 1) % tabs.length;
+            else if (event.key === 'Home') nextIndex = 0;
+            else if (event.key === 'End') nextIndex = tabs.length - 1;
+            else return;
+            event.preventDefault();
+            tabs[nextIndex].focus();
+            activate(tabs[nextIndex]);
+        });
+    });
+});
+</script>
+"""
+
 CARD_CSS = """
 <style>
   :root {
@@ -74,6 +105,11 @@ CARD_CSS = """
     .glossary-list dt, .glossary-list dd { margin: 0; padding: 12px 14px; border-top: 1px solid rgba(148,163,184,.18); line-height: 1.6; }
     .glossary-list dt { color: var(--text); font-weight: 700; }
     .glossary-list dd { color: #cbd5e1; }
+    .glossary-tabs { display: flex; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid rgba(148,163,184,.25); margin: 20px 0; }
+    .glossary-tab { background: transparent; border: 0; border-bottom: 3px solid transparent; color: var(--muted); padding: 12px 16px; font: inherit; font-weight: 700; cursor: pointer; }
+    .glossary-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent2); }
+    .glossary-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .glossary-panel[hidden] { display: none; }
     @media (max-width: 640px) { .glossary-list { grid-template-columns: 1fr; } .glossary-list dt { padding-bottom: 2px; border-top: 1px solid rgba(148,163,184,.18); } .glossary-list dd { padding-top: 2px; border-top: 0; } }
   .source-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(230px,1fr)); gap: 10px; margin-top: 14px; }
   .source-list a { color: #bae6fd; text-decoration-color: rgba(125,211,252,.45); text-underline-offset: 3px; }
@@ -327,7 +363,7 @@ def _glossary_section():
             ("Estalvi operatiu tèrmic", "Cost anual d'operació i manteniment de la font activa menys el de l'alternativa. Positiu vol dir que l'alternativa costa menys cada any; negatiu vol dir que costa més. No inclou la diferència d'inversió CAPEX."),
             ("CAPEX incremental del paquet", "CAPEX del paquet nou (FV + bateria + calefacció alternativa) menys CAPEX de la calefacció de referència. El model inclou el cost configurat de FV/bateria al paquet; no tracta aquests equips com a inversió ja pagada ni resta un valor residual."),
             ("Retorn simple FV/bateria", "CAPEX FV+bateria dividit pel flux net operatiu anual de l'any base, sempre que aquest sigui positiu. No descompta fluxos ni inclou les reposicions futures; és una aproximació ràpida i no substitueix el VAN."),
-            ("Retorn simple tèrmic", "CAPEX tèrmic addicional respecte de la font activa dividit per l'estalvi anual d'operació i manteniment. Només es calcula si tots dos valors són positius; no aplica descompte, inflació ni reposicions."),
+            ("Retorn simple tèrmic", "CAPEX tèrmic addicional respecte de la font activa dividit per l'estalvi anual d'operació i manteniment. Només es calcula si tots dos valors són positius; no aplica descompte, inflació ni reposicions. Si supera els anys d'anàlisi, l'informe el marca com a no recuperable dins l'horitzó estudiat."),
             ("Retorn simple del paquet", "Màxim entre zero i el CAPEX incremental FV+bateria+calefacció respecte del sistema de referència, dividit per l'estalvi anual del paquet. Si l'estalvi anual no és positiu no hi ha retorn simple calculable; si no cal CAPEX addicional, el retorn és zero anys. No descompta fluxos ni incorpora reposicions en el quocient."),
             ("VAN FV/bateria", "Valor actual net de la instal·lació: −CAPEX inicial + suma dels fluxos nets futurs descomptats. Els fluxos incorporen estalvi de factura, O&M i reposicions modelades de bateria/inversor; la producció es degrada i els costos s'indexen segons les hipòtesis. VAN > 0 vol dir valor net positiu respecte dels supòsits i la taxa de descompte; no és un estalvi anual."),
             ("VAN del paquet combinat", "Valor actual dels estalvis del paquet FV+bateria+bomba de calor respecte del sistema de referència actiu, menys CAPEX incremental i reposicions modelades de bateria/inversor. La referència inclou el cost tèrmic actiu i assumeix la compra de tota l'electricitat domèstica a la xarxa; el paquet inclou la factura elèctrica neta amb FV/bateria i manteniment. No modela la reposició futura de la bomba de calor ni del sistema de referència."),
@@ -380,14 +416,93 @@ def _glossary_section():
             ("Any d'anàlisi tèrmica / vida del projecte", "L'horitzó tèrmic s'utilitza per repartir linealment el CAPEX en el cost anualitzat. La vida del projecte s'utilitza per projectar fluxos, inflació, descompte i reposicions. Poden ser horitzons diferents."),
         ]),
     ]
-    sections = []
+    plain_definitions = {
+        "CAPEX (inversió inicial)": "Són els diners que cal posar al principi per comprar i instal·lar els equips. És la inversió inicial, no una despesa que es repeteix cada any.",
+        "BOS (balance of system)": "Són les peces i feines que calen a més dels panells, com cablejat, proteccions o muntatge. Aquí s'estimen amb un percentatge, no amb un pressupost detallat.",
+        "OPEX (costos recurrents)": "Són les despeses que tornen cada any, com l'energia i el manteniment. No inclouen el cost de comprar els equips al principi.",
+        "Cost anualitzat tèrmic": "Reparteix el cost inicial de la calefacció entre els anys d'estudi i hi suma el que costa fer-la funcionar i mantenir-la cada any. És una estimació simple, sense interessos ni futures reparacions de l'equip.",
+        "Cost anual amb FV existent": "És el que es calcula pagar en un any amb les plaques i bateria que ja hi ha: llum comprada menys la compensació pels excedents, més el manteniment tèrmic. No torna a comptar el preu de les plaques o la bateria.",
+        "Estalvi anual de factura FV": "Compara la factura estimada amb plaques amb una situació en què tota l'electricitat s'hagués comprat a la xarxa. Valora tant la llum que deixes de comprar com la que vens; encara no resta manteniment ni inversió inicial.",
+        "Flux net anual FV": "És l'estalvi de factura d'un any menys el manteniment anual de la instal·lació. Encara no descompta el que has pagat pels equips ni les reposicions futures, així que no és el guany final del projecte.",
+        "Estalvi operatiu tèrmic": "Compara el cost anual de fer funcionar i mantenir la calefacció actual amb el de l'alternativa. Si surt positiu, l'alternativa costa menys cada any; no compta el que costa canviar-la.",
+        "CAPEX incremental del paquet": "És la diferència entre la inversió del sistema nou complet i la inversió de la calefacció de referència. Indica quants diners més caldria posar segons els preus configurats.",
+        "Retorn simple FV/bateria": "Divideix el cost inicial de plaques i bateria per l'estalvi net d'un any. Dona una idea ràpida dels anys per recuperar la inversió, però no té en compte què passa amb els preus o els equips més endavant.",
+        "Retorn simple tèrmic": "És el temps estimat perquè l'estalvi anual en ús i manteniment compensi el sobrecost de la nova calefacció. Si l'alternativa no estalvia diners cada any, no es pot calcular; si triga més que els anys estudiats, l'informe la marca com a no recuperable dins d'aquest període.",
+        "Retorn simple del paquet": "És el temps perquè l'estalvi anual del sistema nou complet cobreixi la inversió addicional. No compta que els diners avui valen més que els futurs ni les reposicions; no s'ha de confondre amb el VAN. Si el retorn és més llarg que la vida analitzada, es marca com a no recuperable en aquest horitzó.",
+        "VAN FV/bateria": "Compara el cost inicial amb els estalvis futurs, tenint en compte que els diners futurs es valoren menys i que hi pot haver manteniment o reposicions. Si és positiu, el projecte surt a compte segons les hipòtesis introduïdes; no és un estalvi anual.",
+        "VAN del paquet combinat": "Compara el sistema nou de plaques, bateria i calefacció amb el sistema actual actiu. Inclou la factura estimada, la inversió i algunes reposicions previstes. Un VAN positiu vol dir que el paquet surt millor en aquest escenari, no que el resultat estigui garantit.",
+        "Benefici nominal net": "Suma els estalvis previstos i en resta la inversió addicional i les reposicions. No ajusta el valor dels diners al pas del temps, per això pot diferir del VAN.",
+        "ROI (retorn de la inversió)": "Expressa en percentatge el balanç estimat entre estalvi i inversió addicional al llarg dels anys d'estudi. És una mesura simple: no descompta els estalvis futurs ni compta totes les reposicions.",
+        "O&M (operació i manteniment)": "És el cost de mantenir els equips en funcionament. Per a plaques es calcula amb un percentatge del seu cost; per a calefacció també s'hi suma l'energia que consumeix.",
+        "Flux de caixa acumulat": "Mostra com s'acumulen la despesa inicial i els ingressos o estalvis any rere any. No ajusta els diners futurs, així que pot donar un número diferent del VAN.",
+        "Cost per kWh tèrmic": "És el cost anual de fer funcionar i mantenir la calefacció dividit per la calor que entrega. No inclou la compra de l'equip.",
+        "Taxa de descompte": "És el percentatge que fa que un estalvi futur compti una mica menys que els mateixos diners avui. S'utilitza per calcular el VAN.",
+        "Inflació / indexació": "És l'augment general de preus que el model aplica cada any. No prediu per separat com pujaran la llum, el gas o el manteniment.",
+        "Reposicions": "Són els costos previstos per canviar la bateria o l'inversor durant el període estudiat. El model no preveu canviar la bomba de calor ni la calefacció antiga.",
+        "Preu de compra / venda": "El de compra és el que pagues per la llum que agafes de la xarxa; el de venda és el que et compensen pels excedents que hi envies.",
+        "kW, kWh i kWp": "kW indica com de potent és un equip; kWh indica quanta energia s'ha fet servir o produït; kWp indica la potència nominal dels panells solars. Mesuren coses diferents.",
+        "kWh tèrmic": "És la quantitat de calor que necessita o rep la casa. No és el mateix que la llum o el combustible gastat per produir-la.",
+        "Producció FV": "És tota l'electricitat que generen els panells. Una part es pot fer servir a casa i una altra pot sobrar i anar a la xarxa.",
+        "Consum / càrrega": "És l'electricitat que necessita la casa. Si la calefacció funciona amb electricitat, també s'hi compta.",
+        "Importació de xarxa": "És l'electricitat que la casa ha de comprar perquè en aquell moment les plaques i la bateria no cobreixen el consum.",
+        "Excedent / exportació": "És la llum solar que sobra després d'alimentar la casa i carregar la bateria. S'envia a la xarxa i es compensa al preu de venda configurat.",
+        "Autoconsum": "Indica quina part de tota la llum solar produïda s'aprofita a la mateixa casa, en lloc d'enviar-la a la xarxa.",
+        "Autosuficiència": "Indica quina part de tota l'electricitat que necessita la casa es cobreix amb energia pròpia. La resta s'ha de comprar a la xarxa.",
+        "Capacitat i potència de bateria": "La capacitat (kWh) és quanta energia hi cap; la potència (kW) és com de ràpid es pot carregar o descarregar. Una bateria gran no sempre pot donar molta potència.",
+        "SOC (estat de càrrega)": "És quanta energia queda a la bateria, expressada com a quantitat o percentatge. Els límits configurats poden fer que no s'utilitzi tota la capacitat.",
+        "Eficiència round-trip": "És la part de l'energia carregada que es pot recuperar després. La diferència es perd en el procés de carregar i descarregar.",
+        "Cicles equivalents": "Compara tota l'energia que ha sortit de la bateria amb la seva capacitat. Serveix per fer-se una idea de quant s'ha utilitzat, no compta cada càrrega real una per una.",
+        "Demanda tèrmica": "És la calor que necessita la casa per mantenir-se a la temperatura desitjada. La llum o el combustible necessaris per produir-la depenen de l'equip.",
+        "COP / η / SCOP": "Són maneres de mesurar l'eficiència de la calefacció. Una bomba de calor amb COP 3 entrega aproximadament tres unitats de calor per cada unitat de llum en aquelles condicions. El valor real canvia amb el temps i l'equip.",
+        "Energia d'entrada": "És la llum o el combustible que necessita la calefacció per donar la calor demanada.",
+        "Energia primària total": "És una estimació de tots els recursos energètics necessaris abans que l'energia arribi a casa, incloent-hi les pèrdues prèvies de producció i transport segons els factors del model.",
+        "Energia primària no renovable": "És la part dels recursos energètics estimats que prové de fonts no renovables, segons els percentatges configurats per al model.",
+        "Energia primària renovable": "És la part dels recursos energètics estimats que el model classifica com a renovable.",
+        "Factor d'energia primària": "És un multiplicador que estima quanta energia s'ha hagut d'utilitzar abans que la llum o el combustible arribin a casa. Aquí és un valor de referència configurable.",
+        "CO₂e": "És una manera d'expressar diferents gasos que escalfen el clima en una unitat comuna equivalent al CO₂.",
+        "Emissions operatives": "És la contaminació climàtica estimada de l'energia que es consumeix cada any per escalfar la casa. Depèn dels factors configurats; la taula tèrmica no resta l'efecte de tenir plaques.",
+        "Emissions incorporades": "És la contaminació estimada que s'ha generat en fabricar plaques, bateria i inversor. No inclou tots els materials, transport i obres de la casa.",
+        "CO₂ evitat i balanç net": "El CO₂ evitat estima la contaminació de la xarxa que les plaques poden evitar. El balanç net restant la fabricació dels equips només cobreix plaques, bateria i inversor, no tots els equips de calefacció.",
+        "Degradació": "És la pèrdua gradual de producció dels panells amb els anys que el model aplica a la projecció.",
+        "Any meteorològic representatiu": "És un any de dades triat perquè s'assembli a un any típic de sol i fred dins les dades disponibles. No vol dir que tots els anys futurs siguin iguals.",
+        "PVGIS / JRC": "PVGIS és una eina de la Comissió Europea que estima sol, temps i producció solar. JRC és el centre de recerca europeu que la manté.",
+        "UA i graus-hora": "UA resumeix com de ràpid perd calor la casa. El càlcul l'utilitza junt amb la diferència entre la temperatura desitjada dins i la temperatura de fora per estimar la calor necessària cada hora.",
+        "Conductivitat i difusivitat del sòl": "Descriuen com el terreny transmet i escampa la calor. Són importants per estimar la geotèrmia i s'haurien de confirmar amb dades del lloc.",
+        "Càrrega de disseny i ΔT útil": "La càrrega de disseny és la potència punta que s'espera que necessiti la casa. ΔT útil és la diferència de temperatura assumida entre el terra i el circuit geotèrmic.",
+        "Flux tèrmic i pou geotèrmic": "El flux tèrmic estima quanta calor es pot intercanviar amb el terreny per metre de sonda. El càlcul dona una mida aproximada dels pous, però no substitueix un estudi geològic.",
+        "Inversor": "És l'equip que transforma l'electricitat dels panells perquè la casa la pugui utilitzar. El model preveu que pot caldre substituir-lo al cap d'uns anys.",
+        "Recomanació ponderada": "És una nota que combina cost, contaminació i ús de recursos no renovables segons la importància donada a cada tema. No necessàriament tria l'opció més barata.",
+        "Millor combinació provada": "És la combinació que ha sortit millor entre les mides provades. No vol dir que sigui la millor de totes les possibles ni que càpiga a la teulada.",
+        "Any d'anàlisi tèrmica / vida del projecte": "Són dos períodes diferents: un serveix per repartir el cost de la calefacció; l'altre per projectar ingressos, despeses i canvis d'equip al llarg del projecte.",
+    }
+
+    technical_sections = []
+    plain_sections = []
     for heading, entries in groups:
-        definitions = "".join(
-            f"<dt>{term}</dt><dd>{definition}</dd>"
+        technical_definitions = "".join(
+            f"<dt>{escape(term)}</dt><dd>{escape(definition)}</dd>"
             for term, definition in entries
         )
-        sections.append(f'<div class="glossary-group"><h3>{heading}</h3><dl class="glossary-list">{definitions}</dl></div>')
-    return '<div class="metric-note">Els imports amb €/any són valors anuals estimats. Els indicadors només són comparables quan comparteixen la mateixa demanda, període i supòsits. Les definicions següents expliquen també la base de comparació i les exclusions rellevants.</div>' + "".join(sections)
+        plain_definitions_for_group = "".join(
+            f"<dt>{escape(term)}</dt><dd>{escape(plain_definitions[term])}</dd>"
+            for term, _ in entries
+        )
+        technical_sections.append(
+            f'<div class="glossary-group"><h3>{escape(heading)}</h3><dl class="glossary-list">{technical_definitions}</dl></div>'
+        )
+        plain_sections.append(
+            f'<div class="glossary-group"><h3>{escape(heading)}</h3><dl class="glossary-list">{plain_definitions_for_group}</dl></div>'
+        )
+
+    return f'''
+    <div class="metric-note">Els imports amb €/any són valors anuals estimats. Els indicadors només són comparables quan comparteixen demanda, període i supòsits. Tria el nivell d'explicació que et sigui més útil.</div>
+    <div class="glossary-tabs" role="tablist" aria-label="Nivell de detall del glossari">
+      <button class="glossary-tab" id="glossary-technical-tab" type="button" role="tab" aria-controls="glossary-technical-panel" aria-selected="true" tabindex="0">Definicions tècniques</button>
+      <button class="glossary-tab" id="glossary-plain-tab" type="button" role="tab" aria-controls="glossary-plain-panel" aria-selected="false" tabindex="-1">Llenguatge planer</button>
+    </div>
+    <div class="glossary-panel" id="glossary-technical-panel" role="tabpanel" aria-labelledby="glossary-technical-tab">{"".join(technical_sections)}</div>
+    <div class="glossary-panel" id="glossary-plain-panel" role="tabpanel" aria-labelledby="glossary-plain-tab" hidden>{"".join(plain_sections)}</div>
+    '''
 
 
 def _executive_summary(summary, economic_summary):
@@ -458,6 +573,26 @@ def _autoconsumption_narrative(summary):
     """
 
 
+def _payback_label(payback_years, horizon_years):
+    if payback_years is None:
+        return "No recuperable amb l'estalvi calculat"
+    if horizon_years is not None and payback_years > horizon_years:
+        return (
+            f'<span class="badge warning">Descartada econòmicament: no es recupera en {horizon_years:.0f} anys</span>'
+            f'<br><small>Retorn simple estimat: {payback_years:.1f} anys</small>'
+        )
+    return f"{payback_years:.1f} anys"
+
+
+def _economically_viable(comparison, horizon_years):
+    payback_years = comparison.get("payback_years")
+    return (
+        comparison.get("npv", 0.0) > 0
+        and payback_years is not None
+        and payback_years <= horizon_years
+    )
+
+
 def _thermal_section(thermal_summary):
     if not thermal_summary:
         return ""
@@ -467,6 +602,7 @@ def _thermal_section(thermal_summary):
     best_energy = thermal_summary.get("best_energy")
     active_source = thermal_summary.get("active_source")
     pv_alternatives = thermal_summary.get("electric_alternatives_with_pv", [])
+    analysis_horizon = float(thermal_summary.get("analysis_years", 20))
     payback_reference_key = thermal_summary.get("payback_reference")
     payback_reference = next(
         (item for item in thermal_summary.get("sources", []) if item["source_key"] == payback_reference_key),
@@ -480,7 +616,11 @@ def _thermal_section(thermal_summary):
         badges = ""
         low_efficiency = item["source_key"] == "electricitat_resistencia"
         if recommendation and item["source_key"] == recommendation["source_key"]:
-            badges += '<span class="badge best">✓ Recomanat</span> '
+            payback = item.get("payback_years")
+            if payback is None or payback > analysis_horizon:
+                badges += '<span class="badge warning">⚠ Millor puntuació ponderada; no recupera dins l’horitzó</span> '
+            else:
+                badges += '<span class="badge best">✓ Millor puntuació ponderada</span> '
         if best_cost and item["source_key"] == best_cost["source_key"]:
             badges += '<span class="badge best">💰 Menys cost</span> '
         if best_env and item["source_key"] == best_env["source_key"]:
@@ -493,7 +633,9 @@ def _thermal_section(thermal_summary):
         if item["source_key"] == payback_reference_key:
             payback_text = "Referència"
         else:
-            payback_text = f"{item.get('payback_years'):.1f} anys" if item.get('payback_years') is not None else "No viable"
+            payback_text = _payback_label(
+                item.get("payback_years"), thermal_summary.get("analysis_years")
+            )
         row = f"""<tr>
             <td class="source-name">{item['source_name']}{' <br/>' + badges if badges else ''}</td>
             <td class="numeric">{item['performance']:.2f}</td>
@@ -655,29 +797,26 @@ def _thermal_savings_section(thermal_summary):
     energy_saving = current["primary_energy_nonrenewable_kwh"] - best["primary_energy_nonrenewable_kwh"]
     additional_capex = best["capex_eur"] - current["capex_eur"]
     
-    years = int(thermal_summary.get("analysis_years", 20))
-    total_cost_saving_20y = annual_cost_saving * years - additional_capex
-    total_emissions_saved_20y = emissions_saving * years
-    total_energy_saved_20y = energy_saving * years
-
-    roi_pct = total_cost_saving_20y / additional_capex * 100 if additional_capex > 0 else None
+    years = float(thermal_summary.get("analysis_years", 20))
     payback_years = additional_capex / annual_cost_saving if annual_cost_saving > 0 and additional_capex > 0 else None
     
     # Determine color and mood based on savings
     cost_class = "saving" if annual_cost_saving > 0 else "loss"
+    annualized_class = "saving" if annualized_cost_saving > 0 else "loss"
     env_class = "saving" if emissions_saving > 0 else "loss"
     energy_class = "saving" if energy_saving > 0 else "loss"
     
-    payback_text = f"{payback_years:.1f} anys" if payback_years is not None else "No hi ha retorn econòmic"
-    roi_text = f"{roi_pct:.0f}%" if roi_pct is not None else "N/A"
+    payback_text = _payback_label(payback_years, years)
     
     recommendation_msg = ""
-    if annual_cost_saving > 0 and emissions_saving > 0:
-        recommendation_msg = f"<strong>✓ Resultat:</strong> {best['source_name']} redueix costos d'operació en {annual_cost_saving:.0f} €/any i emissions en {emissions_saving:.0f} kg CO2e/any. El balanç net a {years} anys, incloent la diferència de CAPEX, és {total_cost_saving_20y:+.0f} €."
+    if payback_years is not None and payback_years > years:
+        recommendation_msg = f"<strong>⚠ No es recomana econòmicament:</strong> {best['source_name']} pot reduir l'OPEX en {annual_cost_saving:.0f} €/any, però el retorn simple estimat ({payback_years:.1f} anys) supera l'horitzó de {years:.0f} anys. La millora ambiental, si n'hi ha, es presenta separadament i no compensa aquest criteri econòmic."
+    elif annual_cost_saving > 0 and emissions_saving > 0:
+        recommendation_msg = f"<strong>✓ Resultat:</strong> {best['source_name']} redueix l'OPEX en {annual_cost_saving:.0f} €/any i les emissions en {emissions_saving:.0f} kg CO2e/any. La diferència de CAPEX i el retorn simple es mostren separadament."
     elif annual_cost_saving > 0:
-        recommendation_msg = f"<strong>⚠ Resultat:</strong> {best['source_name']} estalvia {annual_cost_saving:.0f} €/any en operació i manteniment, però podria tenir altres implicacions. El balanç net a {years} anys, incloent la diferència de CAPEX, és {total_cost_saving_20y:+.0f} €."
+        recommendation_msg = f"<strong>⚠ Resultat:</strong> {best['source_name']} redueix l'OPEX en {annual_cost_saving:.0f} €/any, però cal valorar la inversió inicial de {additional_capex:.0f} € i el retorn simple calculat."
     elif emissions_saving > 0:
-        recommendation_msg = f"<strong>🌱 Resultat ambiental:</strong> {best['source_name']} redueix emissions en {emissions_saving:.0f} kg CO2e/any, però augmenta el cost d'operació i manteniment en {abs(annual_cost_saving):.0f} €/any. El balanç net a {years} anys, incloent la diferència de CAPEX, és {total_cost_saving_20y:+.0f} €."
+        recommendation_msg = f"<strong>🌱 Resultat ambiental:</strong> {best['source_name']} redueix emissions en {emissions_saving:.0f} kg CO2e/any, però augmenta l'OPEX en {abs(annual_cost_saving):.0f} €/any. No s'ha d'interpretar com una recomanació econòmica."
     else:
         recommendation_msg = f"<strong>ℹ Info:</strong> La font actual ja és una bona solució. No hi ha millores significatives disponibles."
     
@@ -687,18 +826,23 @@ def _thermal_savings_section(thermal_summary):
         <div>
             <h3>Comparativa: sistema actiu {current['source_name']} → alternativa amb millor puntuació global {best['source_name']}</h3>
             <div class="metric-note">
-                La millor puntuació combina cost anualitzat, emissions i energia no renovable; no vol dir necessàriament que sigui l'alternativa més barata. Els estalvis són sistema actiu menys alternativa. El CAPEX és només de calefacció, sense FV ni bateria.
+                Els indicadors econòmics principals són OPEX anual, CAPEX addicional, cost anualitzat complet i retorn simple dins els {years:.0f} anys d'anàlisi. Els estalvis són sistema actiu menys alternativa. Aquest canvi tèrmic no inclou FV ni bateria i no és el VAN del paquet complet.
             </div>
         </div>
         
         <div class="savings-grid">
             <div class="savings-card">
-                <div class="label">Estalvi econòmic anual</div>
+                <div class="label">Estalvi OPEX anual vs sistema actual</div>
                 <div class="value {cost_class}">{annual_cost_saving:+.0f} €</div>
-                <div class="unit">€/any (operació + manteniment)</div>
+                <div class="unit">€/any (energia, costos fixos i manteniment)</div>
             </div>
             <div class="savings-card">
-                <div class="label">Estalvi energètic anual</div>
+                <div class="label">Estalvi de cost anualitzat</div>
+                <div class="value {annualized_class}">{annualized_cost_saving:+.0f} €</div>
+                <div class="unit">€/any (OPEX + CAPEX tèrmic / {years:.0f} anys)</div>
+            </div>
+            <div class="savings-card">
+                <div class="label">Canvi anual d'energia no renovable</div>
                 <div class="value {energy_class}">{energy_saving:+.0f} kWh</div>
                 <div class="unit">Primaria no renovable/any</div>
             </div>
@@ -708,29 +852,14 @@ def _thermal_savings_section(thermal_summary):
                 <div class="unit">Emissions CO2 evitades/any</div>
             </div>
             <div class="savings-card">
-                <div class="label">Inversió addicional</div>
+                <div class="label">CAPEX tèrmic addicional</div>
                 <div class="value economic">{additional_capex:+.0f} €</div>
                 <div class="unit">Cost inicial capex</div>
             </div>
             <div class="savings-card">
-                <div class="label">Balanç net a {years} anys</div>
-                <div class="value saving">{total_cost_saving_20y:+.0f} €</div>
-                <div class="unit">Estalvi operatiu acumulat menys CAPEX addicional</div>
-            </div>
-            <div class="savings-card">
-                <div class="label">Retorn del CAPEX addicional</div>
+                <div class="label">Retorn simple del CAPEX addicional</div>
                 <div class="value economic">{payback_text}</div>
-                <div class="unit">Payback period</div>
-            </div>
-            <div class="savings-card">
-                <div class="label">CO2 evitat ({years} anys)</div>
-                <div class="value saving">{total_emissions_saved_20y:+.0f} kg</div>
-                <div class="unit">Tons de CO2e evitades</div>
-            </div>
-            <div class="savings-card">
-                <div class="label">ROI a {years} anys</div>
-                <div class="value economic">{roi_text}</div>
-                <div class="unit">Return on investment</div>
+                <div class="unit">Any estimat de recuperació; no inclou descompte ni reposicions</div>
             </div>
         </div>
         
@@ -1084,8 +1213,10 @@ def _personalized_analysis(thermal_summary, summary, economic_summary, config, c
             item for item in (tested_comparisons or combined_comparisons)
             if item.get("source_key") in {"aerotermia", "geotermia"}
         ]
-        best_package = max(combined_heat_pumps, key=lambda item: item.get("npv", float("-inf")), default=None)
-        if combined_comparisons and best_package and best_package.get("npv", 0) > 0:
+        project_life = float(combined_economic_summary.get("project_life_years", 25)) if combined_economic_summary else 25.0
+        viable_packages = [item for item in combined_heat_pumps if _economically_viable(item, project_life)]
+        best_package = max(viable_packages, key=lambda item: item.get("npv", float("-inf")), default=None)
+        if combined_comparisons and best_package:
             final_is_viable = True
             configuration_note = (
                 f" amb FV {best_package['pv_peak_power_kwp']:.1f} kWp i bateria de {best_package['battery_capacity_kwh']:.1f} kWh"
@@ -1097,16 +1228,28 @@ def _personalized_analysis(thermal_summary, summary, economic_summary, config, c
                 "dins les combinacions provades i sota els preus, costos i horitzó configurats. És una estimació condicionada a aquests supòsits, no una garantia de rendibilitat."
             )
         elif combined_comparisons:
-            final_recommendation = (
-                f"Amb els supòsits actuals no s'aconsella invertir en cap combinació FV+bateria+bomba de calor provada respecte de "
-                f"{combined_economic_summary.get('reference_name', 'la referència')}: cap alternativa té VAN positiu. "
-                "Cal mantenir la comparació amb el sistema de referència o revisar pressupostos i tarifes abans de decidir."
-            )
-        elif thermal_payback is not None:
+            if any(item.get("npv", 0.0) > 0 for item in combined_heat_pumps):
+                final_recommendation = (
+                    f"Cap combinació provada combina VAN positiu i retorn simple dins els {project_life:.0f} anys. "
+                    "No es recomana invertir sense revisar pressupostos, tarifes o hipòtesis."
+                )
+            else:
+                final_recommendation = (
+                    f"Amb els supòsits actuals no s'aconsella invertir en cap combinació FV+bateria+bomba de calor provada respecte de "
+                    f"{combined_economic_summary.get('reference_name', 'la referència')}: cap alternativa té VAN positiu. "
+                    "Cal mantenir la comparació amb el sistema de referència o revisar pressupostos i tarifes abans de decidir."
+                )
+        elif thermal_payback is not None and thermal_payback <= float(thermal_summary.get("analysis_years", 20)):
             final_is_viable = True
             final_recommendation = (
                 f"Es pot estudiar {rec_name}: el retorn simple tèrmic és {thermal_payback:.1f} anys, "
                 "abans de reposicions i sense l'efecte conjunt FV+bateria."
+            )
+        elif thermal_payback is not None:
+            final_recommendation = (
+                f"No es recomana econòmicament substituir {active_name} per {rec_name}: el retorn simple "
+                f"estimat ({thermal_payback:.1f} anys) supera l'horitzó d'anàlisi de "
+                f"{float(thermal_summary.get('analysis_years', 20)):.0f} anys."
             )
         else:
             final_recommendation = (
@@ -1273,11 +1416,13 @@ def _combined_economic_section(combined_summary):
             if item["source_key"] in {"aerotermia", "geotermia"}
         ]
         best_heat_pump = max(heat_pump_options, key=lambda item: item["npv"]) if heat_pump_options else None
-        recommended = best_heat_pump if best_heat_pump and best_heat_pump["npv"] > 0 else None
+        project_life = float(combined_summary["project_life_years"])
+        viable_heat_pumps = [item for item in heat_pump_options if _economically_viable(item, project_life)]
+        recommended = max(viable_heat_pumps, key=lambda item: item["npv"], default=None)
         recommended_payback = (
             "No viable"
-            if recommended is None or recommended["payback_years"] is None
-            else f"{recommended['payback_years']:.1f} anys"
+            if recommended is None
+            else _payback_label(recommended["payback_years"], combined_summary["project_life_years"])
         )
         most_efficient = min(
             heat_pump_options,
@@ -1291,8 +1436,16 @@ def _combined_economic_section(combined_summary):
             item for item in configuration_scenarios
             if item.get("source_key") in {"aerotermia", "geotermia"}
         ]
+        tested_electric_options = [
+            item for item in configuration_scenarios
+            if item.get("source_key") in {"aerotermia", "geotermia", "electricitat_resistencia"}
+        ]
         best_tested = max(tested_heat_pumps, key=lambda item: item.get("npv", float("-inf")), default=None)
-        viable_tested = best_tested if best_tested and best_tested.get("npv", 0) > 0 else None
+        viable_tested_options = [
+            item for item in tested_heat_pumps
+            if _economically_viable(item, float(combined_summary["project_life_years"]))
+        ]
+        viable_tested = max(viable_tested_options, key=lambda item: item.get("npv", float("-inf")), default=None)
         fig = go.Figure()
         fig.add_bar(
                 x=names,
@@ -1326,7 +1479,7 @@ def _combined_economic_section(combined_summary):
 
         rows = []
         for item in comparisons:
-                payback = "No viable" if item["payback_years"] is None else f"{item['payback_years']:.1f} anys"
+                payback = _payback_label(item["payback_years"], combined_summary["project_life_years"])
                 saving_class = "positive" if item["annual_saving"] > 0 else "negative"
                 is_recommended = recommended is not None and item["source_key"] == recommended["source_key"]
                 is_reference = item["source_key"] == "electricitat_resistencia"
@@ -1341,31 +1494,37 @@ def _combined_economic_section(combined_summary):
                 <tr class="{row_class}">
                     <td><strong>{item['source_name']}</strong><br>{decision_badge}</td>
                     <td class="numeric">{item['pv_battery_capex']:.0f} €</td>
-                    <td class="numeric">{item['heating_capex']:.0f} €</td>
                     <td class="numeric">{item['package_capex']:.0f} €</td>
                     <td class="numeric">{item['incremental_capex']:.0f} €</td>
+                    <td class="numeric">{item['package_annual_cost']:.0f} €/any</td>
                     <td class="numeric {saving_class}">{item['annual_saving']:.0f} €/any</td>
                     <td class="numeric">{payback}</td>
-                                        <td class="numeric">{item['replacement_cost_over_life']:.0f} €</td>
-                                        <td class="numeric">{item['net_saving_over_life']:.0f} €</td>
                     <td class="numeric">{item['npv']:.0f} €</td>
                 </tr>
                 """)
 
         tested_rows = []
-        for item in sorted(tested_heat_pumps, key=lambda entry: entry.get("npv", float("-inf")), reverse=True)[:5]:
-                payback = "No viable" if item.get("payback_years") is None else f"{item['payback_years']:.1f} anys"
-                current_badge = '<span class="decision-badge reference">FV/bateria actuals</span>' if item.get("is_current_configuration") else ""
+        for item in sorted(tested_electric_options, key=lambda entry: entry.get("npv", float("-inf")), reverse=True):
+                payback = _payback_label(item.get("payback_years"), item.get("project_life_years"))
+                badges = []
+                if item.get("is_current_configuration"):
+                    badges.append('<span class="decision-badge reference">FV/bateria actuals</span>')
+                if item["source_key"] == "electricitat_resistencia":
+                    badges.append('<span class="decision-badge reference">Referència COP 1</span>')
+                if best_tested and item["source_key"] == best_tested["source_key"] and item["pv_peak_power_kwp"] == best_tested["pv_peak_power_kwp"] and item["battery_capacity_kwh"] == best_tested["battery_capacity_kwh"]:
+                    badges.append('<span class="decision-badge recommended">VAN més alt</span>')
                 tested_rows.append(f"""
-                <tr>
-                    <td><strong>{item['source_name']}</strong><br>{current_badge}</td>
+                <tr class="scenario-row">
+                    <td><strong>{item['source_name']}</strong><br>{' '.join(badges)}</td>
                     <td class="numeric">{item['pv_peak_power_kwp']:.1f} kWp</td>
                     <td class="numeric">{item['battery_capacity_kwh']:.1f} kWh</td>
-                    <td class="numeric">{item.get('input_energy_kwh', 0.0):.0f} kWh/any</td>
+                    <td class="numeric">{item['package_capex']:.0f} €</td>
+                    <td class="numeric">{item['annual_operating_cost_eur']:.0f} €/any</td>
+                    <td class="numeric">{item['annual_saving']:+.0f} €/any</td>
+                    <td class="numeric">{item['self_consumption_rate_pct']:.1f}%</td>
+                    <td class="numeric">{item['self_sufficiency_rate_pct']:.1f}%</td>
                     <td class="numeric">{item.get('grid_import_kwh', 0.0):.0f} kWh/any</td>
-                    <td class="numeric">{item['annual_saving']:.0f} €/any</td>
                     <td class="numeric">{payback}</td>
-                    <td class="numeric">{item['emissions_kg_co2e']:.0f} kg CO2e/any</td>
                     <td class="numeric">{item['npv']:.0f} €</td>
                 </tr>
                 """)
@@ -1376,23 +1535,25 @@ def _combined_economic_section(combined_summary):
                     f"{viable_tested['source_name']}, FV {viable_tested['pv_peak_power_kwp']:.1f} kWp, "
                     f"bateria {viable_tested['battery_capacity_kwh']:.1f} kWh; VAN {viable_tested['npv']:.0f} €."
                     if viable_tested else
-                    "Cap combinació provada amb bomba de calor té VAN positiu amb els supòsits actuals."
+                    f"Cap combinació provada amb bomba de calor combina VAN positiu i retorn simple dins els {combined_summary['project_life_years']} anys."
                 )
                 scenario_section = f"""
-                <h4>Combinació de sistema amb millor resultat econòmic provat</h4>
+                <h4>Combinacions de sistema provades, ordenades per VAN</h4>
                 <div class="metric-note">
                     Millor resultat: <strong>{best_tested_text}</strong>
                     S'han provat FV al 60%, 100% i 160% de la potència actual, i bateries de 0, 1× i 2× la capacitat de referència.
                     Es mantenen el perfil horari, orientació FV, ubicació, demanda i tarifes del cas. És un cribratge de mides candidates:
                     no verifica superfície de teulada, ombres noves, límits d'inversor, subvencions ni pressupostos d'instal·lador.
                     Les emissions són operatives de la font tèrmica segons els factors del catàleg; no representen la petjada neta de cicle de vida del paquet FV/bateria.
+                    La taula mostra totes les combinacions simulades, inclosa la resistència com a referència. CAPEX, cost anual, estalvi i VAN comparen cada paquet amb {combined_summary['reference_name']} més compra de tota l'electricitat domèstica a la xarxa.
                 </div>
                 <div class="combined-table-wrap">
                     <table class="combined-table">
                         <thead><tr>
-                            <th>Calefacció</th><th>FV</th><th>Bateria</th><th>Energia d'entrada tèrmica</th>
-                            <th>Importació de xarxa</th><th>Estalvi any 1</th><th>Retorn simple</th>
-                            <th>Emissions operatives tèrmiques</th><th>VAN</th>
+                            <th>Calefacció</th><th>FV</th><th>Bateria</th><th>CAPEX total paquet</th>
+                            <th>Cost net anual (OPEX)</th><th>Estalvi net anual vs referència</th>
+                            <th>Autoconsum</th><th>Autosuficiència</th><th>Importació de xarxa</th>
+                            <th>Retorn simple</th><th>VAN</th>
                         </tr></thead>
                         <tbody>{''.join(tested_rows)}</tbody>
                     </table>
@@ -1415,7 +1576,7 @@ def _combined_economic_section(combined_summary):
                     <div class="combined-highlight primary">
                         <div class="highlight-label">{'Millor bomba de calor amb FV/bateria actuals' if recommended else 'Viabilitat de la configuració actual'}</div>
                         <div class="highlight-value">{recommended['source_name'] if recommended else 'Cap opció viable'}</div>
-                        <div class="highlight-detail">{'VAN: ' + f"{recommended['npv']:.0f} € · Payback: {recommended_payback}" if recommended else 'Cap bomba de calor té VAN positiu amb els supòsits actuals.'}</div>
+                        <div class="highlight-detail">{'VAN: ' + f"{recommended['npv']:.0f} € · Retorn: {recommended_payback}" if recommended else f"Cap bomba de calor combina VAN positiu i retorn dins els {combined_summary['project_life_years']} anys."}</div>
                     </div>
                     <div class="combined-highlight efficiency">
                         <div class="highlight-label">Més eficient energèticament</div>
@@ -1432,19 +1593,18 @@ def _combined_economic_section(combined_summary):
                 <div class="combined-table-wrap">
                         <table class="combined-table">
                 <thead><tr>
-                    <th>Alternativa</th><th>CAPEX FV+bateria (€)</th><th>CAPEX calefacció (€)</th>
-                    <th>CAPEX total paquet (€)</th><th>CAPEX addicional vs referència (€)</th>
-                                        <th>Estalvi net anual</th><th>Payback</th>
-                                        <th>Reposicions estimades ({combined_summary['project_life_years']} anys)</th>
-                                        <th>Benefici nominal net ({combined_summary['project_life_years']} anys)</th><th>VAN</th>
+                    <th>Alternativa</th><th>CAPEX FV+bateria (€)</th><th>CAPEX total paquet (€)</th>
+                    <th>CAPEX addicional vs sistema actual (€)</th><th>Cost net anual paquet (OPEX)</th>
+                    <th>Estalvi anual vs referència</th><th>Retorn simple</th><th>VAN {combined_summary['project_life_years']} anys</th>
                 </tr></thead>
                 <tbody>{''.join(rows)}</tbody>
             </table>
         </div>
         <div class="metric-note">
-            La inversió addicional és CAPEX del paquet nou menys el CAPEX de la calefacció de referència.
-            El VAN considera la inflació i la taxa de descompte configurades. Aquest CAPEX sí que inclou FV i bateria;
-            no s'ha de confondre amb el CAPEX tèrmic de la comparativa de fonts de calefacció. El benefici nominal net acumula els estalvis anuals amb inflació i resta CAPEX addicional i reposicions estimades de bateria/inversor, però no descompta el valor temporal dels diners. El VAN sí que aplica la taxa de descompte.
+            La taula resumeix els indicadors econòmics principals: inversió inicial (CAPEX), cost anual recurrent net (OPEX),
+            estalvi anual respecte del sistema actiu, retorn simple i VAN del paquet. El VAN aplica la inflació i la taxa de
+            descompte configurades i resta les reposicions modelades de bateria/inversor. No s'ha de confondre aquest CAPEX
+            complet amb el CAPEX tèrmic de les taules de fonts.
             Les reposicions mostrades cobreixen només bateria i inversor segons la vida útil configurada; encara no modelen la substitució de la bomba de calor ni del sistema de referència.
             El cost geotèrmic inclou perforació i una estimació configurable de bomba de calor/sistema geotèrmic; no és un pressupost d'obra i encara no inclou una partida separada per interacumulador, adaptació d'emissors, obra interior ni contingències.
         </div>
@@ -1520,14 +1680,38 @@ def _thermal_charts(thermal_summary):
         margin=dict(t=100, b=90),
     )
 
-    # 4. Gràfic de Payback period
-    payback_values = [item.get("payback_years") if item.get("payback_years") is not None else 0 for item in sources]
-    payback_colors = ["#34d399" if v is not None and v > 0 else "#f87171" for v in [item.get("payback_years") for item in sources]]
+    # 4. Gràfic de retorn simple, limitat a l'horitzó econòmic analitzat.
+    payback_horizon = float(thermal_summary.get("analysis_years", 20))
+    raw_payback_values = [item.get("payback_years") for item in sources]
+    payback_values = [
+        min(value, payback_horizon) if value is not None else 0.0
+        for value in raw_payback_values
+    ]
+    payback_colors = [
+        "#f87171" if value is None else
+        ("#fbbf24" if value > payback_horizon else "#34d399")
+        for value in raw_payback_values
+    ]
+    payback_labels = [
+        "No recuperable" if value is None else
+        (f"> {payback_horizon:.0f} anys" if value > payback_horizon else f"{value:.1f} anys")
+        for value in raw_payback_values
+    ]
     fig_payback = go.Figure()
-    fig_payback.add_bar(x=names, y=payback_values, marker_color=payback_colors, name="Retorn")
+    fig_payback.add_bar(
+        x=names,
+        y=payback_values,
+        marker_color=payback_colors,
+        name="Retorn simple",
+        text=payback_labels,
+        textposition="outside",
+        customdata=["No recuperable" if value is None else f"{value:.1f} anys" for value in raw_payback_values],
+        hovertemplate="%{x}<br>Retorn estimat: %{customdata}<extra></extra>",
+    )
     fig_payback.update_layout(template="plotly_dark", 
                              title=f"Període de retorn respecte de {thermal_summary.get('payback_reference', 'la referència')}",
-                             xaxis_title="Font", yaxis_title="Anys", height=400)
+                             xaxis_title="Font", yaxis_title=f"Anys (horitzó: {payback_horizon:.0f})",
+                             yaxis=dict(range=[0, payback_horizon]), height=400)
 
     # 5. Gràfic de Cost vs Emissions (Scatter)
     fig_scatter = go.Figure()
@@ -1930,6 +2114,7 @@ def build_report(df, daily, monthly, hourly_profile, summary, battery_diag, econ
       <div class="report-footer">Energia Clara · Informe del cas {identity['case_name']} · Elaborat per Aniol Calafell · {identity['date']}</div>
     </section>
   </main>
+{GLOSSARY_TABS_SCRIPT}
 </body>
 </html>
 """
