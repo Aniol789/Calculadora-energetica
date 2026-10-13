@@ -6,6 +6,7 @@ dimensionament de la bateria (capacitat en kWh vs potencia en kW).
 import numpy as np
 import pandas as pd
 from battery import simulate_battery_series
+from thermal import evaluate_electric_alternatives
 
 SEASON_MONTHS = {
     "Hivern": [12, 1, 2],
@@ -249,7 +250,7 @@ def compute_combined_economic_summary(thermal_summary, economic_summary, economi
         )
         alternative_annual_cost = float(alternative.get("system_energy_cost_eur", 0.0)) + annual_pv_om
         annual_saving = reference_annual_cost - alternative_annual_cost
-        payback = incremental_capex / annual_saving if incremental_capex > 0 and annual_saving > 0 else None
+        payback = max(incremental_capex, 0.0) / annual_saving if annual_saving > 0 else None
 
         cumulative_saving = 0.0
         npv = -incremental_capex
@@ -293,6 +294,9 @@ def compute_combined_economic_summary(thermal_summary, economic_summary, economi
             "payback_years": payback,
             "grid_import_kwh": alternative.get("grid_import_kwh", 0.0),
             "grid_export_kwh": alternative.get("grid_export_kwh", 0.0),
+            "input_energy_kwh": alternative.get("input_energy_kwh", 0.0),
+            "emissions_kg_co2e": alternative.get("emissions_kg_co2e", 0.0),
+            "primary_energy_nonrenewable_kwh": alternative.get("primary_energy_nonrenewable_kwh", 0.0),
         })
 
     return {
@@ -314,6 +318,104 @@ def compute_combined_economic_summary(thermal_summary, economic_summary, economi
         ],
         "comparisons": comparisons,
     }
+
+
+def evaluate_configuration_scenarios(
+    pv_series,
+    base_load_series,
+    active_thermal_electricity_series,
+    thermal_config,
+    thermal_summary,
+    battery_config,
+    economic_config,
+    lifecycle_config,
+    current_pv_kwp,
+    outdoor_temp_series=None,
+):
+    """Compara combinacions candidates de potència FV i capacitat de bateria."""
+    if not thermal_summary or not thermal_summary.get("sources"):
+        return []
+    if float(current_pv_kwp) <= 0:
+        raise ValueError("La potència FV de referència ha de ser positiva")
+
+    pv_values = sorted({round(float(current_pv_kwp) * factor, 2) for factor in (0.6, 1.0, 1.6)})
+    reference_battery_capacity = float(battery_config.get("capacity_kwh", 0.0))
+    battery_step = reference_battery_capacity if reference_battery_capacity > 0 else 3.0
+    battery_values = sorted({0.0, round(battery_step, 2), round(battery_step * 2, 2)})
+    base_load = base_load_series.reset_index(drop=True).astype(float)
+    active_thermal_load = active_thermal_electricity_series.reset_index(drop=True).astype(float)
+    if len(pv_series) != len(base_load) or len(base_load) != len(active_thermal_load):
+        raise ValueError("Els perfils FV, domèstic i tèrmic han de tenir la mateixa durada")
+
+    results = []
+    for pv_kwp in pv_values:
+        scenario_pv = pv_series.astype(float) * (pv_kwp / float(current_pv_kwp))
+        for capacity_kwh in battery_values:
+            scenario_battery = dict(battery_config)
+            scenario_battery["enabled"] = capacity_kwh > 0
+            scenario_battery["capacity_kwh"] = capacity_kwh
+            if reference_battery_capacity > 0:
+                power_factor = capacity_kwh / reference_battery_capacity
+                scenario_battery["max_charge_kw"] = float(battery_config.get("max_charge_kw", 0.0)) * power_factor
+                scenario_battery["max_discharge_kw"] = float(battery_config.get("max_discharge_kw", 0.0)) * power_factor
+            else:
+                scenario_battery["max_charge_kw"] = capacity_kwh
+                scenario_battery["max_discharge_kw"] = capacity_kwh
+
+            scenario_load = base_load + active_thermal_load
+            surplus = scenario_pv.reset_index(drop=True) - scenario_load
+            if scenario_battery["enabled"]:
+                battery_result = simulate_battery_series(surplus, scenario_battery)
+                grid_import = battery_result["grid_import_kwh"]
+                grid_export = battery_result["grid_export_kwh"]
+            else:
+                grid_import = (-surplus).clip(lower=0)
+                grid_export = surplus.clip(lower=0)
+            scenario_summary = compute_summary(pd.DataFrame({
+                "pv_kwh": scenario_pv.reset_index(drop=True),
+                "load_kwh": scenario_load,
+                "grid_import_kwh": grid_import,
+                "grid_export_kwh": grid_export,
+            }))
+            system_economics = compute_economic_summary(
+                scenario_summary,
+                pv_kwp,
+                scenario_battery,
+                economic_config,
+                lifecycle_config,
+            )
+            alternatives = evaluate_electric_alternatives(
+                scenario_pv,
+                base_load_series,
+                thermal_config,
+                scenario_battery,
+                economic_config,
+                lifecycle_config,
+                outdoor_temp_series,
+            )
+            scenario_thermal_summary = {
+                **thermal_summary,
+                "electric_alternatives_with_pv": alternatives,
+            }
+            combined = compute_combined_economic_summary(
+                scenario_thermal_summary,
+                system_economics,
+                economic_config,
+            )
+            if combined:
+                for comparison in combined["comparisons"]:
+                    comparison["pv_peak_power_kwp"] = pv_kwp
+                    comparison["battery_capacity_kwh"] = capacity_kwh
+                    comparison["is_current_configuration"] = bool(
+                        np.isclose(pv_kwp, current_pv_kwp)
+                        and np.isclose(
+                            capacity_kwh,
+                            reference_battery_capacity if battery_config.get("enabled", False) else 0.0,
+                        )
+                    )
+                results.extend(combined["comparisons"])
+
+    return sorted(results, key=lambda item: item["npv"], reverse=True)
 
 
 def compute_lifecycle_environmental_summary(

@@ -1,8 +1,15 @@
-# Simulador anual d'instal·lacions fotovoltaiques
+# Calculadora energètica residencial
 
-Simula la producció, el consum i (opcionalment) una bateria domèstica
-d'una instal·lació fotovoltaica al llarg d'un any, per a qualsevol
-ubicació i configuració que triïs.
+Eina digital per estudiar sistemes residencials amb fotovoltaica, bateria i
+calefacció elèctrica o de combustible. El projecte continua un treball final
+de màster: trasllada càlculs que abans es feien manualment amb fulls de càlcul
+a una simulació horària reproduïble, una comparativa tècnicoeconòmica i un
+informe HTML interactiu.
+
+El desenvolupament s'ha fet amb suport d'eines d'IA, però els resultats els
+calcula codi Python determinista a partir de dades i hipòtesis configurables.
+No és un sistema d'IA que decideixi pel client: les fórmules, comparadors i
+limitacions del model es poden revisar.
 
 ## Com funciona (resum)
 
@@ -11,13 +18,14 @@ ubicació i configuració que triïs.
 | Irradiació solar i producció FV horària | **PVGIS** (Comissió Europea, JRC) — API pública, gratuïta, sense clau |
 | Consum de la llar | Perfil sintètic per defecte (editable) o CSV propi |
 | Bateria | Model físic simplificat (càrrega/descàrrega hora a hora) |
+| Sistemes tèrmics | Catàleg editable de rendiments, costos i factors ambientals |
+| Economia | Fluxos anuals, reposicions modelades, inflació, descompte i VAN |
 
-PVGIS és la mateixa base de dades que fan servir instal·ladors i estudis
-oficials: li dónes latitud/longitud + característiques del sistema
-(potència pic, inclinació, orientació, pèrdues) i et retorna la producció
-horària estimada durant un any, tenint en compte la irradiació real de la
-zona, temperatura, etc. És fiable i gratuïta, però necessites connexió a
-internet quan executis l'script.
+PVGIS proporciona una sèrie horària estimada segons ubicació i configuració
+FV. A cada hora, el simulador calcula el balanç entre generació, consum,
+importació de xarxa, excedents i emmagatzematge. PVGIS és una font de dades de
+referència, però un any representatiu no substitueix mesures locals ni una
+anàlisi de variabilitat interanual.
 
 El consum **no** té cap font pública equivalent amb el teu perfil real, així
 que es genera una corba sintètica raonable (punta matí/vespre, més consum a
@@ -25,18 +33,30 @@ l'hivern) escalada al kWh anual que li indiquis. Si tens el teu consum
 horari real (moltes distribuïdores el faciliten en CSV des de l'àrea de
 client), el pots connectar directament — veure més avall.
 
+## Què calcula
+
+- Balanç energètic horari i resums mensuals, diaris i estacionals.
+- Autoconsum, autosuficiència, electricitat importada i excedents exportats.
+- Bateria amb límits separats de capacitat (kWh) i potència (kW), i diagnòstics d'ús.
+- Comparació de sis fonts tèrmiques per cost, rendiment, energia primària i emissions.
+- CAPEX/OPEX, cost anualitzat, retorn simple, fluxos de caixa i VAN.
+- Graella de nou combinacions FV/bateria i alternatives de calefacció elèctrica.
+- Informe HTML interactiu amb gràfics Plotly, conclusions i glossari.
+
 ## Estructura del projecte
 
 ```
-pv_simulator/
-├── config.py          <- AQUÍ canvies ubicació, sistema FV, consum i bateria
-├── pvgis_client.py     <- connexió amb l'API de PVGIS
-├── consumption.py      <- perfil de consum per defecte / carregador de CSV propi
-├── battery.py           <- simulació de la bateria (distingeix límits de potència vs capacitat)
-├── analysis.py            <- resums diaris/mensuals i diagnòstic de dimensionament de bateria
-├── thermal.py             <- fonts de calor/fred, energia primària, emissions i costos
-├── report.py               <- genera l'informe HTML interactiu (Plotly)
-├── simulate.py               <- script principal, executa tot i genera les sortides
+├── streamlit_app.py   <- editor d'escenaris al navegador
+├── case_manager.py    <- càrrega i desament de casos JSON
+├── simulate.py        <- orquestra la simulació i les sortides
+├── pvgis_client.py    <- obtenció i validació de dades PVGIS
+├── consumption.py     <- perfils de consum sintètics o CSV propi
+├── battery.py         <- simulació horària de bateria
+├── thermal.py         <- fonts tèrmiques, rendiments i costos
+├── analysis.py        <- resums, projeccions i comparatives econòmiques
+├── report.py          <- informe HTML, gràfics i glossari
+├── cases/             <- cas demostratiu i casos locals
+├── tests/             <- proves de càlcul i coherència
 └── requirements.txt
 ```
 
@@ -52,11 +72,11 @@ pv_simulator/
      de la capacitat: pot passar que sobri energia però l'inversor/bateria
      no la pugui absorbir prou ràpid.
    - Cicles complets equivalents/any (útil per estimar la vida útil).
-   - Una recomanació automàtica en text segons aquests indicadors.
-2. **`resultats_horaris.csv`** — les 8760 hores de l'any amb producció,
-   consum, excedent/dèficit, import/export i estat de la bateria.
-3. **`resultats_diaris.csv`** — un resum per a cada dia de l'any (producció,
-   consum, autosuficiència %, i si aquell dia la bateria es va saturar o buidar).
+   - Recomanacions automàtiques per distingir límits de capacitat i potència.
+2. **`resultats_horaris.csv`** — les hores de l'any amb producció, consum,
+   excedent/dèficit, importació/exportació i estat de la bateria.
+3. **`resultats_diaris.csv`** — resums diaris de producció, consum i
+   autosuficiència, incloent si la bateria s'ha saturat o buidat.
 
 ## Anàlisi de fonts de calor i fred
 
@@ -80,8 +100,18 @@ L'informe mostra energia primària total i no renovable, emissions operatives,
 cost del recurs, electricitat auxiliar, manteniment, inversió i cost
 anualitzat. També inclou gràfics de comparació energètica, emissions, costos,
 inversió i període de retorn. El període de retorn es calcula respecte de la
-font indicada a `payback_reference`. Els factors i preus són valors orientatius
-inicials i es poden modificar amb `source_overrides`.
+font tèrmica activa del cas; `payback_reference` només s'utilitza si no hi ha
+cap font activa vàlida. Els factors i preus són valors orientatius inicials i
+es poden modificar amb `source_overrides`.
+
+L'informe també compara una graella de potència FV (60%, 100% i 160% de la
+configuració actual) i capacitat de bateria (0, 1× i 2× la capacitat de
+referència), juntament amb aerotèrmia, geotèrmia i resistència. La classificació
+econòmica usa el VAN del paquet i els costos de reposició configurats. És un
+cribratge basat en el mateix perfil horari, orientació, ubicació, demanda i
+tarifes; no comprova límits de teulada/inversor, ombres, pressupostos d'obra ni
+emissions incorporades de cada alternativa. Cal confirmar la combinació amb
+dades i ofertes específiques abans d'invertir.
 
 La font indicada a `active_source` s'integra en la simulació FV: la seva
 demanda elèctrica horària se suma al consum domèstic i és coberta per la FV,
@@ -91,7 +121,7 @@ Si la font activa és gas, gasoil o biomassa, no s'afegeix consum elèctric
 tèrmic a l'escenari actual. Les alternatives elèctriques es calculen després
 sota una FV i una bateria iguals a les existents.
 
-## Posar-ho en marxa a VS Code
+## Instal·lació i ús
 
 1. **Instal·la Python** (3.9 o superior) si no el tens: https://www.python.org/downloads/
 2. Obre la carpeta `pv_simulator` a VS Code (`File > Open Folder`).
@@ -108,23 +138,22 @@ sota una FV i una bateria iguals a les existents.
    ```bash
    pip install -r requirements.txt
    ```
-5. Obre `config.py`, canvia ubicació/potència/consum/bateria com vulguis.
-6. Executa:
+5. Inicia l'editor web:
+   ```bash
+   streamlit run streamlit_app.py
+   ```
+   Des de l'app pots configurar un cas, desar-lo i generar l'informe HTML.
+6. També pots executar la simulació des del terminal:
    ```bash
    python simulate.py
    ```
-   Et sortirà el resum anual per terminal, un CSV amb el detall horari
-   (`resultats_horaris.csv`) i un gràfic mensual (`produccio_vs_consum.png`).
+   Cal connexió a internet perquè el simulador obtingui dades de PVGIS.
 
 ## Com avaluar diferents casos
 
-Per comparar instal·lacions/ubicacions diferents, la manera més simple és
-duplicar `config.py` (p.ex. `config_barcelona.py`, `config_girona.py`) i
-canviar la primera línia de `simulate.py` (`import config`) pel fitxer que
-vulguis, o bé anar canviant els valors i executant de nou — cada execució
-sobreescriu `resultats_horaris.csv`, així que si vols conservar resultats
-canvia el nom de sortida a `config.py` (`OUTPUT["hourly_csv_path"]`) abans
-de cada prova.
+Per comparar ubicacions o sistemes, crea o duplica un cas des de l'editor
+Streamlit. Les sortides CSV i HTML es regeneren a cada execució; desa o
+exporta només resultats que hagis revisat i anonimitzat.
 
 ### Afegir el teu propi consum real
 A `config.py`:
@@ -134,8 +163,8 @@ CONSUMPTION = {
     "custom_csv_path": "el_meu_consum.csv",
 }
 ```
-El CSV ha de tenir dues columnes (data/hora i kWh) amb 8760 files (una per
-hora de l'any).
+El CSV ha de contenir una sèrie horària completa amb data/hora i kWh. Un any
+normal té 8760 hores i un any de traspàs 8784.
 
 ### Activar bateria
 ```python
@@ -146,37 +175,24 @@ BATTERY = {
 }
 ```
 
-## Sobre GitHub (breu introducció)
+### Executar les proves
 
-GitHub és un servei on pots desar el teu codi "al núvol", portar un
-historial de canvis (Git) i compartir-lo o versionar-lo. No és
-imprescindible per fer córrer aquest projecte — funciona igual només amb
-els fitxers al teu ordinador — però és útil si vols:
-- Tenir còpia de seguretat / historial de versions.
-- Compartir el projecte o treballar-hi des de diferents ordinadors.
-- Que quedi "públic" com a portfoli.
+```bash
+python -m unittest discover -s tests -v
+```
 
-Passos bàsics (des del terminal de VS Code, dins la carpeta del projecte):
-```bash
-git init
-git add .
-git commit -m "Primera versio del simulador FV"
-```
-Després, crea un repositori buit a https://github.com (botó "New repository"),
-i connecta'l:
-```bash
-git remote add origin https://github.com/EL_TEU_USUARI/pv_simulator.git
-git branch -M main
-git push -u origin main
-```
-A partir d'aquí, cada cop que facis canvis:
-```bash
-git add .
-git commit -m "Descripcio del canvi"
-git push
-```
-VS Code també té una pestanya de "Source Control" (icona de branca al
-lateral) des d'on pots fer tot això amb clics, sense escriure les ordres.
+## Publicació i privacitat
+
+Abans de fer públic el repositori, revisa coordenades, casos JSON, CSV de
+consum, informes HTML i captures de pantalla. No hi publiquis factures ni
+dades identificables de clients. El `.gitignore` exclou les sortides
+generades i els casos locals; `cases/default_case.json` és el cas demostratiu
+versionat i també s'ha de revisar abans de publicar-lo.
+
+El repositori encara no declara una llicència. Fer-lo públic permet consultar
+el codi, però no concedeix automàticament permís general per reutilitzar-lo o
+redistribuir-lo. Tria i afegeix una llicència abans de convidar contribucions o
+reutilització.
 
 ## Limitacions actuals / possibles ampliacions
 
@@ -200,8 +216,8 @@ L'ordinador ha de continuar encès i executant Streamlit. Aquesta adreça només
 
 ## Referències de dades
 
-- [PVGIS, servei API i documentació del JRC](https://joint-research-centre.ec.europa.eu/photovoltaic-geographical-information-system-pvgis/using-pvgis-5/api-non-interactive-service_en): producció fotovoltaica i dades meteorològiques horàries.
-- [Eurostat, preus d'electricitat domèstica (nrg_pc_204)](https://ec.europa.eu/eurostat/databrowser/view/nrg_pc_204/default/table): mitjanes semestrals per país i banda de consum; no substitueixen la tarifa del contracte individual.
+- [PVGIS, servei API i documentació del JRC](https://joint-research-centre.ec.europa.eu/photovoltaic-geographical-information-system-pvgis/using-pvgis-5/api-non-interactive-service_en): producció FV i dades meteorològiques horàries.
+- [Eurostat, preus d'electricitat domèstica (nrg_pc_204)](https://ec.europa.eu/eurostat/databrowser/view/nrg_pc_204/default/table): mitjanes semestrals per país i banda de consum.
 - [Eurostat, preus de gas domèstic (nrg_pc_202)](https://ec.europa.eu/eurostat/databrowser/view/nrg_pc_202/default/table): mitjanes semestrals per país i banda de consum.
 - [AVEBIOM, índex de preus de biocombustibles sòlids](https://avebiom.org/actividades/indice-de-precios-biocombustibles-solidos/): seguiment periòdic del preu del pellet.
 - [MITECO, factors del registre de petjada de carboni](https://www.miteco.gob.es/es/cambio-climatico/temas/registro-huella/huella-de-carbonoinscripcion.html): consulta els factors oficials disponibles per any i combustible.

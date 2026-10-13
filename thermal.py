@@ -638,7 +638,12 @@ def compare_thermal_sources(heat_demand_kwh, thermal_config=None, outdoor_temp_s
     if weight_total <= 0:
         raise ValueError("La suma dels pesos de la recomanació ha de ser superior a zero")
     weights = {name: value / weight_total for name, value in weights.items()}
-    reference_key = settings.get("payback_reference", source_keys[0] if source_keys else None)
+    active_source_key = settings.get("active_source")
+    reference_key = (
+        active_source_key
+        if any(item["source_key"] == active_source_key for item in results)
+        else settings.get("payback_reference", source_keys[0] if source_keys else None)
+    )
     reference = next((item for item in results if item["source_key"] == reference_key), None)
     if reference:
         for result in results:

@@ -26,6 +26,7 @@ from analysis import (
     hourly_profile_by_season, compute_summary, compute_economic_summary,
     compute_lifecycle_environmental_summary, compute_lifecycle_projection,
     battery_sizing_diagnostics, compute_combined_economic_summary,
+    evaluate_configuration_scenarios,
 )
 from report import build_report
 from thermal import (
@@ -171,6 +172,19 @@ def run():
     combined_economic_summary = compute_combined_economic_summary(
         thermal_summary, economic_summary, config.ECONOMY
     )
+    if combined_economic_summary and thermal_summary:
+        combined_economic_summary["configuration_scenarios"] = evaluate_configuration_scenarios(
+            pv["pv_kwh"],
+            load["load_kwh"],
+            thermal_profile["thermal_electricity_kwh"],
+            thermal_runtime_config,
+            thermal_summary,
+            config.BATTERY,
+            config.ECONOMY,
+            config.LIFECYCLE,
+            config.PV_SYSTEM["peak_power_kwp"],
+            outdoor_temp,
+        )
 
     print_summary(summary)
     print_economic_summary(economic_summary)

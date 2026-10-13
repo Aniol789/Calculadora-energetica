@@ -16,3 +16,7 @@ produccio_vs_consum.png
 resultats_horaris.csv
 resultats_diaris.csv
 informes_historic/
+
+# Locally saved cases may contain private locations or customer data.
+cases/*.json
+!cases/default_case.json
