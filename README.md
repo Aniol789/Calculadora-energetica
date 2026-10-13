@@ -192,9 +192,11 @@ versionat i també s'ha de revisar abans de publicar-lo.
 El codi d'aquest repositori es distribueix sota la llicència
 [Apache 2.0](LICENSE). Permet utilitzar, copiar, modificar i redistribuir el
 programari, inclòs comercialment, subjecte a les seves condicions, com ara
-incloure una còpia de la llicència i conservar els avisos de copyright. També
-inclou una concessió de patents. És una llicència permissiva: no impedeix que
-altres persones copiïn o reutilitzin el codi si compleixen aquests termes.
+incloure una còpia de la llicència i conservar els avisos de copyright i
+atribució. El fitxer [NOTICE](NOTICE) identifica l'autor original i s'ha de
+conservar quan es redistribueixi el projecte o una obra derivada. Apache 2.0
+també inclou una concessió de patents. És una llicència permissiva: no impedeix
+que altres persones copiïn o reutilitzin el codi si compleixen aquests termes.
 
 ## Limitacions actuals / possibles ampliacions
 
