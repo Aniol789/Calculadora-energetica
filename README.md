@@ -226,7 +226,7 @@ To keep the app available while your computer is off, deploy it to a cloud servi
 2. Choose **Create app**, select the repository, the `main` branch, and `streamlit_app.py`.
 3. In **Advanced settings**, choose a Python version compatible with the project dependencies, then deploy. Streamlit installs packages listed in `requirements.txt`.
 4. Once deployment finishes, open the `*.streamlit.app` URL on your phone and bookmark it or add it to your home screen.
-5. Under **Settings / Sharing**, restrict access to your account if private sharing is available on your plan. If you make the app public, anyone with the link can use it.
+5. Under **Settings / Sharing**, choose **Only specific people can view this app** to keep it private, then invite viewers by email if needed. Community Cloud allows one private app per workspace.
 
 The app does not save shared case or report files on the server: each browser uses its own session state. Download a case JSON to keep it between sessions. Uploaded consumption CSV files and generated reports are temporary; download results before closing or refreshing the page. Consumption data is sent to the app server for calculation, and coordinates are sent to PVGIS to retrieve solar and weather data.
 
