@@ -218,6 +218,20 @@ que altres persones copiïn o reutilitzin el codi si compleixen aquests termes.
 
 L'ordinador ha de continuar encès i executant Streamlit. Aquesta adreça només serveix dins la xarxa local; per accedir-hi des de fora cal desplegar l'app en un servei d'allotjament i configurar-ne l'accés.
 
+## Deploy for access from any network
+
+To keep the app available while your computer is off, deploy it to a cloud service. One straightforward option is [Streamlit Community Cloud](https://share.streamlit.io/):
+
+1. Push the project changes to GitHub and sign in to Streamlit Community Cloud with an account that can access the repository.
+2. Choose **Create app**, select the repository, the `main` branch, and `streamlit_app.py`.
+3. In **Advanced settings**, choose a Python version compatible with the project dependencies, then deploy. Streamlit installs packages listed in `requirements.txt`.
+4. Once deployment finishes, open the `*.streamlit.app` URL on your phone and bookmark it or add it to your home screen.
+5. Under **Settings / Sharing**, restrict access to your account if private sharing is available on your plan. If you make the app public, anyone with the link can use it.
+
+The app does not save shared case or report files on the server: each browser uses its own session state. Download a case JSON to keep it between sessions. Uploaded consumption CSV files and generated reports are temporary; download results before closing or refreshing the page. Consumption data is sent to the app server for calculation, and coordinates are sent to PVGIS to retrieve solar and weather data.
+
+Free services may suspend inactive apps, so the first visit after a period of inactivity can take longer while the app starts. Streamlit Cloud menu names and privacy options may vary by plan and account settings.
+
 ## Referències de dades
 
 - [PVGIS, servei API i documentació del JRC](https://joint-research-centre.ec.europa.eu/photovoltaic-geographical-information-system-pvgis/using-pvgis-5/api-non-interactive-service_en): producció FV i dades meteorològiques horàries.

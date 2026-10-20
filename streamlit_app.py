@@ -1,15 +1,20 @@
+import hashlib
 import json
 import subprocess
 import sys
+import tempfile
+from copy import deepcopy
 from pathlib import Path
 
 import streamlit as st
 
 from case_manager import (
     CASES_DIR,
+    default_case,
     get_default_case_file,
     list_case_files,
     load_case,
+    prepare_ephemeral_run_case,
     save_case,
     slugify_case_name,
 )
@@ -29,132 +34,152 @@ def get_case_from_state():
 case = get_case_from_state()
 
 
-st.title("Case editor bàsic")
-st.caption("Defineix cada cas per blocs. Cada pestanya té un botó de guardar explícit i al final hi ha un sol botó per generar l'informe HTML.")
+st.title("Calculadora energètica residencial")
+st.caption("Configura el sistema i genera un informe tècnic, econòmic i ambiental. Els casos es mantenen a la sessió del navegador; exporta el JSON si el vols conservar.")
 
 case_files = list_case_files()
 if not case_files:
     case_files = ["default_case.json"]
 
 with st.sidebar:
-    st.subheader("Gestió de casos")
+    st.subheader("Casos")
     selected_case = st.selectbox("Casos guardats", options=case_files, index=0)
-    st.caption("Selecciona un cas ja guardat per carregar-lo o modificar-lo.")
+    st.caption("Els casos predefinits són compartits; les modificacions només afecten la teva sessió.")
 
     if st.button("Carregar el cas seleccionat"):
         try:
-            loaded = load_case(CASES_DIR / selected_case)
+            loaded = load_case(Path(CASES_DIR) / selected_case)
             st.session_state.case = loaded
             case.clear()
             case.update(loaded)
-            st.success(f"Cas carregat: {selected_case}")
+            st.session_state.pop("generated_outputs", None)
+            st.success(f"Cas carregat a la sessió: {selected_case}")
         except Exception as exc:
             st.error(f"No s'ha pogut carregar: {exc}")
 
+    uploaded_case = st.file_uploader("Carregar un cas JSON", type=["json"], key="case_json_upload")
+    if uploaded_case is not None:
+        upload_content = uploaded_case.getvalue()
+        upload_fingerprint = hashlib.sha256(upload_content).hexdigest()
+        if upload_fingerprint != st.session_state.get("loaded_case_fingerprint"):
+            try:
+                loaded = json.loads(upload_content.decode("utf-8"))
+                required_sections = {
+                    "LOCATION", "PV_SYSTEM", "CONSUMPTION", "THERMAL",
+                    "BATTERY", "ECONOMY", "LIFECYCLE", "OUTPUT",
+                }
+                if not isinstance(loaded, dict) or not required_sections.issubset(loaded):
+                    raise ValueError("El JSON no conté tots els blocs de configuració requerits.")
+                case.clear()
+                case.update(loaded)
+                st.session_state.case = case
+                st.session_state["loaded_case_fingerprint"] = upload_fingerprint
+                st.session_state.pop("generated_outputs", None)
+                st.success("Cas JSON carregat a la sessió.")
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                st.error(f"No s'ha pogut carregar el cas JSON: {exc}")
+
+    if case["CONSUMPTION"].get("profile") == "custom_csv":
+        uploaded_consumption = st.file_uploader(
+            "Consum horari CSV",
+            type=["csv"],
+            help="Sèrie completa d'un any amb data/hora i kWh. Es tracta només a la sessió actual.",
+            key="custom_consumption_upload",
+        )
+        if uploaded_consumption is not None:
+            st.session_state["custom_consumption_csv"] = {
+                "name": uploaded_consumption.name,
+                "content": uploaded_consumption.getvalue(),
+            }
+        if st.session_state.get("custom_consumption_csv"):
+            st.caption(f"CSV preparat: {st.session_state['custom_consumption_csv']['name']}")
+
     if st.button("Crear un cas en blanc"):
-        fresh_case = {
-            "LOCATION": {
-                "name": "Cas nou",
-                "lat": 41.8745,
-                "lon": 2.0347,
-                "altitude_m": 542,
-                "climate": {
-                    "mean_annual_air_temp_c": 15.3,
-                    "winter_design_temp_c": 3.0,
-                    "summer_design_temp_c": 29.0,
-                    "heating_degree_days_base_18": 1300,
-                    "cooling_degree_days_base_26": 120,
-                },
-                "ground": {
-                    "mean_ground_temp_c": 14.5,
-                    "thermal_conductivity_w_mk": 2.2,
-                    "thermal_diffusivity_m2_s": 1.1e-6,
-                    "groundwater_level_m": 5.0,
-                    "borehole_spacing_m": 6.0,
-                    "rock_type": "granit",
-                },
-            },
-            "PV_SYSTEM": {
-                "peak_power_kwp": 5.0,
-                "tilt_deg": 30,
-                "azimuth_deg": 0,
-                "system_loss_pct": 14,
-                "technology": "crystSi",
-                "mounting": "building",
-                "use_horizon": True,
-            },
-            "PVGIS_DATABASE": "PVGIS-SARAH3",
-            "CONSUMPTION": {"annual_kwh": 6000, "profile": "residential_default", "custom_csv_path": None},
-            "THERMAL": {"enabled": True, "annual_heat_demand_kwh": 10000.0, "active_source": "aerotermia", "peak_power_kw": 8.0, "analysis_years": 20, "heating_setpoint_c": 22.0, "heat_demand_mode": "annual_kwh", "building_heat_loss_kw_per_k": 0.25, "ground_loop_target_temp_c": 8.0, "borehole_diameter_m": 0.12, "groundwater_level_m": 5.0, "payback_reference": "gas_natural", "sources": ["gas_natural", "gasoil", "aerotermia", "geotermia", "biomassa", "electricitat_resistencia"], "weights": {"cost": 0.34, "environment": 0.33, "energy": 0.33}, "source_overrides": {}},
-            "BATTERY": {"enabled": True, "capacity_kwh": 3.0, "max_charge_kw": 3.0, "max_discharge_kw": 3.0, "round_trip_efficiency": 0.90, "min_soc_pct": 10, "max_soc_pct": 100, "initial_soc_pct": 50},
-            "ECONOMY": {"pv_cost_per_kw": 1250.0, "battery_cost_per_kwh": 650.0, "battery_cost_per_kw": 120.0, "installation_extra_pct": 0.12, "annual_om_pct": 0.015, "electricity_buy_price_eur_kwh": 0.2669, "electricity_sell_price_eur_kwh": 0.09, "annual_inflation_pct": 0.02, "discount_rate_pct": 0.04, "project_life_years": 25},
-            "LIFECYCLE": {"panel_degradation_pct_per_year": 0.004, "panel_life_years": 25, "battery_life_years": 10, "inverter_life_years": 12, "inverter_cost_per_kw": 180.0, "pv_embodied_co2_kg_per_kwp": 340.0, "battery_embodied_co2_kg_per_kwh": 80.0, "inverter_embodied_co2_kg_per_kw": 40.0, "grid_emission_factor_kg_co2_per_kwh": 0.18},
-            "OUTPUT": {"save_hourly_csv": True, "hourly_csv_path": "resultats_horaris.csv", "make_plots": True, "make_report": True, "report_archive_dir": "informes_historic", "open_report_in_browser": True},
-        }
+        fresh_case = default_case()
+        fresh_case["LOCATION"]["name"] = "Cas nou"
         st.session_state.case = fresh_case
         case.clear()
         case.update(fresh_case)
-        st.success("Cas en blanc creat.")
+        st.session_state.pop("generated_outputs", None)
+        st.success("Cas en blanc creat a la sessió.")
 
-    if st.button("Duplicar el cas seleccionat"):
-        if selected_case == "default_case.json":
-            st.warning("No es pot duplicar el cas base. Crea un cas nou primer.")
-        else:
-            source_path = CASES_DIR / selected_case
-            source_case = load_case(source_path)
-            new_name = f"{slugify_case_name(source_case['LOCATION']['name'])}_copy"
-            target_path = CASES_DIR / f"{new_name}.json"
-            index = 1
-            while target_path.exists():
-                target_path = CASES_DIR / f"{new_name}_{index}.json"
-                index += 1
-            save_case(source_case, target_path)
-            st.success(f"Cas duplicat: {target_path.name}")
-            st.rerun()
-
-    if st.button("Eliminar el cas seleccionat"):
-        if selected_case == "default_case.json":
-            st.warning("No es pot eliminar el cas base.")
-        else:
-            target = CASES_DIR / selected_case
-            if target.exists():
-                target.unlink()
-                st.success(f"Cas eliminat: {selected_case}")
-                st.rerun()
+    case_filename = f"{slugify_case_name(case['LOCATION']['name'])}.json"
+    st.download_button(
+        "Descarregar cas JSON",
+        data=json.dumps(case, indent=2, ensure_ascii=False),
+        file_name=case_filename,
+        mime="application/json",
+        use_container_width=True,
+    )
+    st.caption("Aquest cas només es desa al navegador durant la sessió. Descarrega el JSON per conservar-lo o tornar-lo a carregar més tard.")
 
 st.subheader("Dades del cas actual")
 case_name = st.text_input("Nom del cas", value=case["LOCATION"]["name"].replace(" ", "_").lower())
 
 
 def save_current_case():
-    filename = f"{case_name.strip() or 'cas'}.json"
-    file_path = ROOT / "cases" / filename
-    save_case(case, file_path)
-    st.session_state["last_saved_case"] = str(file_path)
-    st.success(f"Cas guardat: {file_path}")
+    st.session_state.case = deepcopy(case)
+    st.session_state.pop("generated_outputs", None)
+    st.session_state["case_saved_in_session"] = True
+
+
+if st.session_state.pop("case_saved_in_session", False):
+    st.success("Canvis desats a la sessió del navegador.")
 
 
 def generate_report_html():
     try:
-        filename = f"{case_name.strip() or 'cas'}.json"
-        file_path = ROOT / "cases" / filename
-        save_case(case, file_path)
+        safe_name = slugify_case_name(case_name.strip() or "cas")
+        with tempfile.TemporaryDirectory(prefix="energia_case_") as output_dir:
+            run_case = prepare_ephemeral_run_case(case, output_dir)
+            if run_case["CONSUMPTION"].get("profile") == "custom_csv":
+                uploaded_consumption = st.session_state.get("custom_consumption_csv")
+                if not uploaded_consumption:
+                    st.error("Carrega el CSV horari de consum a la barra lateral abans de generar l'informe.")
+                    return
+                consumption_path = Path(output_dir) / "consum_horari.csv"
+                consumption_path.write_bytes(uploaded_consumption["content"])
+                run_case["CONSUMPTION"]["custom_csv_path"] = str(consumption_path)
+            case_path = Path(output_dir) / "case.json"
+            save_case(run_case, case_path)
 
-        result = subprocess.run(
-            [sys.executable, "simulate_case.py", str(file_path)],
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-        )
+            with st.spinner("Consultant PVGIS i generant l'informe..."):
+                result = subprocess.run(
+                    [sys.executable, "simulate_case.py", str(case_path)],
+                    cwd=str(ROOT),
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
 
-        if result.returncode == 0:
-            st.success("Informe HTML generat correctament.")
-            st.code("Fitxer de cas: " + str(file_path))
-            st.code("Informe: " + str(ROOT / "informe.html"))
-        else:
-            st.error("La simulació ha fallat.")
-            st.code(result.stdout)
-            st.code(result.stderr)
+            if result.returncode != 0:
+                st.error("La simulació ha fallat.")
+                st.code(result.stdout)
+                st.code(result.stderr)
+                return
+
+            outputs = run_case["OUTPUT"]
+            generated = {
+                "report_name": f"{safe_name}_informe.html",
+                "report": Path(outputs["report_html_path"]).read_bytes(),
+                "hourly_name": f"{safe_name}_horari.csv",
+                "daily_name": f"{safe_name}_diari.csv",
+            }
+            generated["hourly"] = (
+                Path(outputs["hourly_csv_path"]).read_bytes()
+                if outputs.get("save_hourly_csv") else None
+            )
+            generated["daily"] = (
+                Path(outputs["daily_csv_path"]).read_bytes()
+                if outputs.get("save_daily_csv") else None
+            )
+            st.session_state["generated_outputs"] = generated
+            st.session_state["generated_case_fingerprint"] = hashlib.sha256(
+                json.dumps(case, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+        st.success("Informe generat. Descarrega'l al dispositiu.")
+    except subprocess.TimeoutExpired:
+        st.error("La simulació ha superat el temps màxim de 10 minuts. Revisa el cas o torna-ho a provar més tard.")
     except Exception as exc:
         st.error(f"Error: {exc}")
 
@@ -195,7 +220,9 @@ with tabs[2]:
         st.subheader("Consum")
         case["CONSUMPTION"]["annual_kwh"] = st.number_input("Consum anual (kWh)", value=float(case["CONSUMPTION"]["annual_kwh"]), step=100.0)
         case["CONSUMPTION"]["profile"] = st.selectbox("Perfil", ["residential_default", "custom_csv"], index=["residential_default", "custom_csv"].index(case["CONSUMPTION"]["profile"]))
-        case["CONSUMPTION"]["custom_csv_path"] = st.text_input("Ruta CSV personalitzat", value=str(case["CONSUMPTION"]["custom_csv_path"]) if case["CONSUMPTION"]["custom_csv_path"] else "")
+        case["CONSUMPTION"]["custom_csv_path"] = None
+        if case["CONSUMPTION"]["profile"] == "custom_csv":
+            st.info("Desa el consum i puja el CSV des de la barra lateral. El fitxer no es desa al servidor.")
         st.form_submit_button("Guardar consum", on_click=save_current_case)
 
 with tabs[3]:
@@ -308,12 +335,37 @@ with tabs[6]:
     with st.form("form_sortida"):
         st.subheader("Sortida")
         case["OUTPUT"]["save_hourly_csv"] = st.checkbox("Guardar CSV horari", value=bool(case["OUTPUT"]["save_hourly_csv"]))
-        case["OUTPUT"]["hourly_csv_path"] = st.text_input("Ruta CSV horari", value=case["OUTPUT"]["hourly_csv_path"])
-        case["OUTPUT"]["make_report"] = st.checkbox("Generar informe HTML", value=bool(case["OUTPUT"]["make_report"]))
-        case["OUTPUT"]["report_archive_dir"] = st.text_input("Carpeta historic informes", value=case["OUTPUT"]["report_archive_dir"])
-        case["OUTPUT"]["open_report_in_browser"] = st.checkbox("Obrir informe al navegador", value=bool(case["OUTPUT"]["open_report_in_browser"]))
+        case["OUTPUT"]["save_daily_csv"] = st.checkbox("Guardar resum diari CSV", value=bool(case["OUTPUT"].get("save_daily_csv", True)))
+        st.caption("Els fitxers es generen temporalment i es descarreguen des d'aquesta pàgina.")
         st.form_submit_button("Guardar sortida", on_click=save_current_case)
 
 st.markdown("---")
 if st.button("Generar informe HTML final", type="primary"):
     generate_report_html()
+
+generated = st.session_state.get("generated_outputs")
+if generated:
+    st.download_button(
+        "Descarregar informe HTML",
+        data=generated["report"],
+        file_name=generated["report_name"],
+        mime="text/html",
+        type="primary",
+        use_container_width=True,
+    )
+    if generated["hourly"] is not None:
+        st.download_button(
+            "Descarregar resultats horaris CSV",
+            data=generated["hourly"],
+            file_name=generated["hourly_name"],
+            mime="text/csv",
+            use_container_width=True,
+        )
+    if generated["daily"] is not None:
+        st.download_button(
+            "Descarregar resum diari CSV",
+            data=generated["daily"],
+            file_name=generated["daily_name"],
+            mime="text/csv",
+            use_container_width=True,
+        )

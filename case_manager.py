@@ -113,6 +113,24 @@ def default_case():
     }
 
 
+def prepare_ephemeral_run_case(case_data, output_dir):
+    """Copy a case and point all simulation outputs at a per-run directory."""
+    run_case = deepcopy(case_data)
+    output = run_case.setdefault("OUTPUT", {})
+    output_dir = Path(output_dir)
+    output.update({
+        "save_hourly_csv": output.get("save_hourly_csv", True),
+        "hourly_csv_path": str(output_dir / "resultats_horaris.csv"),
+        "save_daily_csv": output.get("save_daily_csv", True),
+        "daily_csv_path": str(output_dir / "resultats_diaris.csv"),
+        "make_report": True,
+        "report_html_path": str(output_dir / "informe.html"),
+        "report_archive_dir": str(output_dir / "informes_historic"),
+        "open_report_in_browser": False,
+    })
+    return run_case
+
+
 def ensure_cases_dir():
     CASES_DIR.mkdir(exist_ok=True)
 
